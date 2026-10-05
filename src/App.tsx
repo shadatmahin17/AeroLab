@@ -298,7 +298,7 @@ export default function App() {
             Flight Physics Theory Guide
           </button>
           <span>·</span>
-          <span>AeroLab 3D Suite</span>
+          <span>By Shadat Hossen Mahin</span>
         </div>
       </footer>
 

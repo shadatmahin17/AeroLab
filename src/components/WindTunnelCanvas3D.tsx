@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { SimulationParams, AeroTelemetry } from '../types/aerodynamics';
 import { AIRCRAFT_MODELS } from '../utils/airfoilGenerators';
-import { getAircraft3DModel, Vertex3D } from '../utils/aircraft3DGeometry';
+import { getAircraft3DModel, computeFaceNormal, Vertex3D } from '../utils/aircraft3DGeometry';
 import { windTunnelAudio } from '../utils/audio';
 import { 
   RotateCw, 
@@ -368,16 +368,8 @@ export const WindTunnelCanvas3D: React.FC<WindTunnelCanvas3DProps> = ({
     const renderedFaces = rawModel.faces
       .map((face) => {
         const v0 = transformedVerts[face.indices[0]];
-        const v1 = transformedVerts[face.indices[1]];
-        const v2 = transformedVerts[face.indices[2]];
-
-        const d1 = { x: v1.x - v0.x, y: v1.y - v0.y, z: v1.z - v0.z };
-        const d2 = { x: v2.x - v0.x, y: v2.y - v0.y, z: v2.z - v0.z };
-        const nx = d1.y * d2.z - d1.z * d2.y;
-        const ny = d1.z * d2.x - d1.x * d2.z;
-        const nz = d1.x * d2.y - d1.y * d2.x;
-        const nLen = Math.hypot(nx, ny, nz);
-        const norm = { x: nx / (nLen || 1), y: ny / (nLen || 1), z: nz / (nLen || 1) };
+        // Newell normal: correct for concave / near-collinear polygons (delta wings), unlike a 3-point cross product
+        const norm = computeFaceNormal(transformedVerts, face.indices);
 
         let avgZ = 0;
         let valid = true;
