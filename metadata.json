@@ -1,0 +1,6 @@
+{
+  "name": "AeroLab - Aircraft Wind Tunnel & Aerodynamics Simulator",
+  "description": "Interactive fluid dynamics and flight physics wind tunnel simulator. Test aircraft models and airfoils with real-time lift, drag, pressure gradients, stall separation, and supersonic shockwaves.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
