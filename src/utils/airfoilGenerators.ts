@@ -14,6 +14,8 @@ export const AIRCRAFT_MODELS: Record<AircraftModelType, AircraftModelConfig> = {
     cd0: 0.019,
     flapCapable: false,
     supersonicCapable: true,
+    glbPath: '/models/f-22_raptor_-_fighter_jet_-_free.glb',
+    hasGlbModel: true,
   },
   airliner: {
     id: 'airliner',

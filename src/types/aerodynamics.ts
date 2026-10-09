@@ -19,6 +19,8 @@ export interface AircraftModelConfig {
   cd0: number; // parasitic drag
   flapCapable: boolean;
   supersonicCapable: boolean;
+  glbPath?: string;
+  hasGlbModel?: boolean;
 }
 
 export type VisualMode = 
@@ -44,6 +46,9 @@ export interface SimulationParams {
   show_quiver: boolean;
   show_shockwaves: boolean;
   audio_enabled: boolean;
+  renderEngine?: 'webgl' | 'canvas';
+  landingGear?: boolean;
+  renderShading?: 'pbr' | 'wireframe' | 'cfdHeatmap' | 'xray';
 }
 
 export interface AeroTelemetry {

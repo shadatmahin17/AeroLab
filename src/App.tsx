@@ -2,11 +2,13 @@ import { useState, useMemo, useEffect } from 'react';
 import { SimulationParams } from './types/aerodynamics';
 import { calculateAeroTelemetry } from './utils/airfoilGenerators';
 import { WindTunnelCanvas3D } from './components/WindTunnelCanvas3D';
+import { WindTunnelCanvasWebGL } from './components/WindTunnelCanvasWebGL';
 import { WindTunnelCanvas } from './components/WindTunnelCanvas';
 import { TelemetryHUD } from './components/TelemetryHUD';
 import { AeroCharts } from './components/AeroCharts';
 import { ControlsDeck } from './components/ControlsDeck';
 import { AeroTheoryModal } from './components/AeroTheoryModal';
+import { ModelViewerModal } from './components/ModelViewerModal';
 import { Plane, BookOpen, RotateCcw, Wind, Box, Grid, Keyboard } from 'lucide-react';
 
 const INITIAL_PARAMS: SimulationParams = {
@@ -24,12 +26,16 @@ const INITIAL_PARAMS: SimulationParams = {
   show_quiver: false,
   show_shockwaves: true,
   audio_enabled: false,
+  renderEngine: 'webgl',
+  landingGear: false,
+  renderShading: 'pbr',
 };
 
 export default function App() {
   const [params, setParams] = useState<SimulationParams>(INITIAL_PARAMS);
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const [isTheoryOpen, setIsTheoryOpen] = useState<boolean>(false);
+  const [isModelViewerOpen, setIsModelViewerOpen] = useState<boolean>(false);
   const [dimensionMode, setDimensionMode] = useState<'3d' | '2d'>('3d');
 
   // Parameter update handler
@@ -159,6 +165,19 @@ export default function App() {
               </button>
             </div>
 
+            {/* 3D CAD Asset Inspector Trigger */}
+            <button
+              onClick={() => setIsModelViewerOpen(true)}
+              className="hidden sm:flex px-3 py-1.5 rounded-xl bg-cyan-950/70 border border-cyan-400/40 hover:border-cyan-400 text-xs font-semibold text-cyan-200 hover:text-white transition-all items-center gap-1.5 shadow-sm hover:shadow-[0_0_15px_rgba(56,189,248,0.3)]"
+              title="Inspect 3D GLB CAD Model with Full Turntable & Specifications"
+            >
+              <Box className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+              <span>F-22 3D CAD</span>
+              <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
+                GLB
+              </span>
+            </button>
+
             <button
               onClick={() => setIsTheoryOpen(true)}
               className="hidden sm:flex px-3.5 py-1.5 rounded-xl bg-slate-900/80 border border-cyan-500/30 hover:border-cyan-500/60 text-xs font-semibold text-slate-200 hover:text-white transition-all items-center gap-1.5 whitespace-nowrap shadow-sm hover:shadow-[0_0_15px_rgba(56,189,248,0.25)]"
@@ -185,7 +204,7 @@ export default function App() {
           <div className="flex items-center gap-2">
             <span className="text-slate-200 font-semibold">3D Aerospace Wind Tunnel</span>
             <span aria-hidden="true" className="text-slate-600">·</span>
-            <span>Blender CAD Engine</span>
+            <span>Three.js WebGL &amp; Blender CAD Engine</span>
             <span aria-hidden="true" className="text-slate-600">·</span>
             <span className="text-cyan-400 font-medium">Dynamic CFD Multiphysics Flow</span>
           </div>
@@ -198,20 +217,31 @@ export default function App() {
 
         {/* SECTION A: Wind Tunnel Stage (3D Real Model or 2D Solver) */}
         <section id="wind-tunnel" className="flex flex-col gap-2">
-          {dimensionMode === '3d' ? (
+          {dimensionMode === '2d' ? (
+            <WindTunnelCanvas
+              params={params}
+              onParamChange={handleParamChange}
+              telemetry={telemetry}
+              isPaused={isPaused}
+            />
+          ) : params.renderEngine !== 'canvas' && params.modelType === 'f22' ? (
+            <WindTunnelCanvasWebGL
+              params={params}
+              onParamChange={handleParamChange}
+              telemetry={telemetry}
+              isPaused={isPaused}
+              onFallbackToCanvas={() => handleParamChange('renderEngine', 'canvas')}
+              onOpenModelInspector={() => setIsModelViewerOpen(true)}
+            />
+          ) : (
             <WindTunnelCanvas3D
               params={params}
               onParamChange={handleParamChange}
               telemetry={telemetry}
               isPaused={isPaused}
               onFallbackTo2D={() => setDimensionMode('2d')}
-            />
-          ) : (
-            <WindTunnelCanvas
-              params={params}
-              onParamChange={handleParamChange}
-              telemetry={telemetry}
-              isPaused={isPaused}
+              onOpenWebGL={params.modelType === 'f22' ? () => handleParamChange('renderEngine', 'webgl') : undefined}
+              onOpenModelInspector={params.modelType === 'f22' ? () => setIsModelViewerOpen(true) : undefined}
             />
           )}
         </section>
@@ -271,6 +301,7 @@ export default function App() {
               onTogglePause={() => setIsPaused((prev) => !prev)}
               onReset={handleReset}
               onOpenTheory={() => setIsTheoryOpen(true)}
+              onOpenModelInspector={() => setIsModelViewerOpen(true)}
             />
           </section>
         </div>
@@ -302,10 +333,17 @@ export default function App() {
         </div>
       </footer>
 
-      {/* Educational Modal */}
+      {/* Educational Theory Modal */}
       <AeroTheoryModal
         isOpen={isTheoryOpen}
         onClose={() => setIsTheoryOpen(false)}
+      />
+
+      {/* 3D CAD Asset Inspector Modal */}
+      <ModelViewerModal
+        isOpen={isModelViewerOpen}
+        onClose={() => setIsModelViewerOpen(false)}
+        onApplyToWindTunnel={(opts) => handleParamChange('landingGear', opts.landingGear)}
       />
     </div>
   );

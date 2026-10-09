@@ -13,7 +13,8 @@ import {
   Flame,
   Activity,
   Compass,
-  Play
+  Play,
+  Box
 } from 'lucide-react';
 
 interface WindTunnelCanvas3DProps {
@@ -22,6 +23,8 @@ interface WindTunnelCanvas3DProps {
   telemetry: AeroTelemetry;
   isPaused: boolean;
   onFallbackTo2D?: () => void;
+  onOpenWebGL?: () => void;
+  onOpenModelInspector?: () => void;
 }
 
 interface CameraState {
@@ -63,6 +66,8 @@ export const WindTunnelCanvas3D: React.FC<WindTunnelCanvas3DProps> = ({
   onParamChange,
   telemetry,
   isPaused,
+  onOpenWebGL,
+  onOpenModelInspector,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animFrameIdRef = useRef<number | null>(null);
@@ -946,6 +951,28 @@ export const WindTunnelCanvas3D: React.FC<WindTunnelCanvas3DProps> = ({
 
       {/* Top Right: Camera Presets & Dynamic Features */}
       <div className="absolute top-4 right-4 flex items-center gap-2">
+        {onOpenWebGL && (
+          <button
+            onClick={onOpenWebGL}
+            className="px-3 py-1.5 rounded-lg bg-cyan-950/90 hover:bg-cyan-900/90 border border-cyan-400/50 text-cyan-200 text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-cyan-950/60"
+            title="Switch to Photorealistic WebGL 3D GLB Engine"
+          >
+            <Box className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+            <span className="hidden sm:inline">WebGL 3D GLB</span>
+          </button>
+        )}
+
+        {onOpenModelInspector && (
+          <button
+            onClick={onOpenModelInspector}
+            className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-lg bg-slate-900/90 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white text-xs font-semibold transition-all flex items-center gap-1.5"
+            title="Inspect 3D CAD Asset"
+          >
+            <Box className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="hidden md:inline">Inspect CAD</span>
+          </button>
+        )}
+
         <div className="hidden sm:flex items-center gap-1 p-1 rounded-lg bg-slate-950/85 backdrop-blur-md border border-slate-800">
           <button
             onClick={() => setCameraPreset('side')}
