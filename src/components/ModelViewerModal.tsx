@@ -1,7 +1,17 @@
 import React, { useRef, useEffect, useState } from 'react';
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { AircraftModelType } from '../types/aerodynamics';
+import { AIRCRAFT_MODELS } from '../utils/airfoilGenerators';
+import { 
+  loadGlbAircraftModel, 
+  GLB_MODEL_REGISTRY, 
+  applyCfdPressureHeatmap, 
+  restoreOriginalGlbMaterials, 
+  applyWireframeShading,
+  createAeroForceVectorsGroup,
+  updateAeroForceVectors
+} from '../utils/aircraftGlbModels';
 import { 
   X, 
   RotateCw, 
@@ -9,24 +19,29 @@ import {
   Layers, 
   Camera, 
   Sun, 
-  Sparkles, 
-  ShieldCheck, 
-  Info, 
+  Wind, 
+  Activity, 
   Check, 
   SlidersHorizontal,
   Compass,
-  Download
+  Download,
+  Flame,
+  Plane
 } from 'lucide-react';
 
 interface ModelViewerModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onApplyToWindTunnel?: (options: { landingGear: boolean }) => void;
+  activeModelType?: AircraftModelType;
+  onSelectModel?: (modelType: AircraftModelType) => void;
+  onApplyToWindTunnel?: (options: { modelType: AircraftModelType; landingGear: boolean }) => void;
 }
 
 export const ModelViewerModal: React.FC<ModelViewerModalProps> = ({
   isOpen,
   onClose,
+  activeModelType = 'f22',
+  onSelectModel,
   onApplyToWindTunnel,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
@@ -35,7 +50,12 @@ export const ModelViewerModal: React.FC<ModelViewerModalProps> = ({
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const modelRootRef = useRef<THREE.Group | null>(null);
+  const forceVectorsRef = useRef<THREE.Group | null>(null);
   const animFrameIdRef = useRef<number | null>(null);
+  const lightsGroupRef = useRef<THREE.Group | null>(null);
+
+  // Active inspected model
+  const [selectedModel, setSelectedModel] = useState<AircraftModelType>(activeModelType);
 
   // Loading state
   const [loadingProgress, setLoadingProgress] = useState<number>(0);
@@ -44,44 +64,45 @@ export const ModelViewerModal: React.FC<ModelViewerModalProps> = ({
 
   // Inspector controls
   const [isAutoSpin, setIsAutoSpin] = useState<boolean>(true);
-  const [wireframeMode, setWireframeMode] = useState<boolean>(false);
+  const [shadingMode, setShadingMode] = useState<'pbr' | 'cfdHeatmap' | 'wireframe' | 'xray'>('pbr');
   const [lightingPreset, setLightingPreset] = useState<'tunnel' | 'studio' | 'sunset' | 'cyber'>('tunnel');
+  const [showForceVectors, setShowForceVectors] = useState<boolean>(true);
+  const [showStreamlines, setShowStreamlines] = useState<boolean>(true);
+  const [inspectorAoA, setInspectorAoA] = useState<number>(4.0);
+  const [isStalled, setIsStalled] = useState<boolean>(false);
   const [landingGearDeployed, setLandingGearDeployed] = useState<boolean>(false);
 
-  // Mesh component visibility states
-  const [componentVisibility, setComponentVisibility] = useState<Record<string, boolean>>({
-    airframe: true,
-    canopy: true,
-    cockpit: true,
-    hud: true,
-    instrGlass: true,
-  });
+  // Mesh stats
+  const [meshCount, setMeshCount] = useState<number>(0);
+  const [vertexCount, setVertexCount] = useState<number>(0);
 
-  const lightsGroupRef = useRef<THREE.Group | null>(null);
+  // Sync with prop when opened
+  useEffect(() => {
+    if (activeModelType) {
+      setSelectedModel(activeModelType);
+    }
+  }, [activeModelType, isOpen]);
 
+  // Main Scene Setup
   useEffect(() => {
     if (!isOpen) return;
 
     const mount = mountRef.current;
     if (!mount) return;
 
-    setIsLoading(true);
-    setLoadingProgress(0);
-    setLoadError(null);
-
-    // 1. Scene setup
+    // 1. Scene
     const scene = new THREE.Scene();
     sceneRef.current = scene;
     scene.background = new THREE.Color(0x060a12);
 
-    // 2. Camera setup
+    // 2. Camera
     const width = mount.clientWidth || 800;
     const height = mount.clientHeight || 600;
     const camera = new THREE.PerspectiveCamera(40, width / height, 0.1, 500);
     camera.position.set(16, 8, 16);
     cameraRef.current = camera;
 
-    // 3. Renderer setup
+    // 3. Renderer
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -96,11 +117,11 @@ export const ModelViewerModal: React.FC<ModelViewerModalProps> = ({
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
-    controls.maxDistance = 45;
+    controls.maxDistance = 60;
     controls.minDistance = 4;
     controlsRef.current = controls;
 
-    // 5. Lighting group
+    // 5. Lighting
     const lightsGroup = new THREE.Group();
     scene.add(lightsGroup);
     lightsGroupRef.current = lightsGroup;
@@ -108,8 +129,8 @@ export const ModelViewerModal: React.FC<ModelViewerModalProps> = ({
     const updateLights = (preset: 'tunnel' | 'studio' | 'sunset' | 'cyber') => {
       lightsGroup.clear();
       if (preset === 'tunnel') {
-        lightsGroup.add(new THREE.AmbientLight(0x38bdf8, 0.6));
-        const key = new THREE.DirectionalLight(0xe0f2fe, 2.2);
+        lightsGroup.add(new THREE.AmbientLight(0x38bdf8, 0.65));
+        const key = new THREE.DirectionalLight(0xe0f2fe, 2.4);
         key.position.set(-15, 20, 15);
         lightsGroup.add(key);
         const rim = new THREE.DirectionalLight(0x0284c7, 1.8);
@@ -117,7 +138,7 @@ export const ModelViewerModal: React.FC<ModelViewerModalProps> = ({
         lightsGroup.add(rim);
       } else if (preset === 'studio') {
         lightsGroup.add(new THREE.AmbientLight(0xffffff, 1.2));
-        const key = new THREE.DirectionalLight(0xffffff, 2.5);
+        const key = new THREE.DirectionalLight(0xffffff, 2.8);
         key.position.set(10, 20, 10);
         lightsGroup.add(key);
         const fill = new THREE.DirectionalLight(0xf1f5f9, 1.5);
@@ -125,96 +146,40 @@ export const ModelViewerModal: React.FC<ModelViewerModalProps> = ({
         lightsGroup.add(fill);
       } else if (preset === 'sunset') {
         lightsGroup.add(new THREE.AmbientLight(0xf59e0b, 0.8));
-        const key = new THREE.DirectionalLight(0xf97316, 3.0);
+        const key = new THREE.DirectionalLight(0xf97316, 3.2);
         key.position.set(-20, 10, 5);
         lightsGroup.add(key);
-        const rim = new THREE.DirectionalLight(0x7c3aed, 1.6);
+        const rim = new THREE.DirectionalLight(0x7c3aed, 1.8);
         rim.position.set(20, -5, -10);
         lightsGroup.add(rim);
       } else {
-        // Cyberpunk
         lightsGroup.add(new THREE.AmbientLight(0x06b6d4, 0.7));
-        const key = new THREE.DirectionalLight(0x00f0ff, 2.5);
+        const key = new THREE.DirectionalLight(0x00f0ff, 2.6);
         key.position.set(-15, 15, 10);
         lightsGroup.add(key);
-        const rim = new THREE.DirectionalLight(0xf43f5e, 2.5);
+        const rim = new THREE.DirectionalLight(0xf43f5e, 2.6);
         rim.position.set(15, -10, -15);
         lightsGroup.add(rim);
       }
     };
     updateLights(lightingPreset);
 
-    // 6. Ground circular grid & pedestal
-    const gridHelper = new THREE.GridHelper(24, 24, 0x00f0ff, 0x1e3a5f);
-    gridHelper.position.y = -3.5;
+    // 6. Ground grid & pedestal
+    const gridHelper = new THREE.GridHelper(26, 26, 0x00f0ff, 0x1e3a5f);
+    gridHelper.position.y = -3.8;
     scene.add(gridHelper);
 
-    // 7. Load GLB Model
-    const loader = new GLTFLoader();
-    const modelGroup = new THREE.Group();
-    scene.add(modelGroup);
-    modelRootRef.current = modelGroup;
+    // 7. Force Vectors Group
+    const forceGroup = createAeroForceVectorsGroup();
+    scene.add(forceGroup);
+    forceVectorsRef.current = forceGroup;
 
-    loader.load(
-      '/models/f-22_raptor_-_fighter_jet_-_free.glb',
-      (gltf) => {
-        const root = gltf.scene;
-
-        // Centering & scaling math derived from model bounds (length 189.95, center ~ 40.45, 11.05, 0)
-        const scale = 12.0 / 189.95; // normalize length to 12 scene units
-        root.scale.set(scale, scale, scale);
-        root.position.set(-40.45 * scale, -11.05 * scale, 0);
-
-        // Rotate so nose faces forward
-        modelGroup.rotation.y = 0;
-
-        // Traverse & configure materials
-        root.traverse((child) => {
-          if ((child as THREE.Mesh).isMesh) {
-            const mesh = child as THREE.Mesh;
-            mesh.castShadow = true;
-            mesh.receiveShadow = true;
-
-            // Make glass canopy realistically translucent
-            if (mesh.name === 'Object_6') {
-              mesh.material = new THREE.MeshPhysicalMaterial({
-                color: 0x94a3b8,
-                metalness: 0.1,
-                roughness: 0.05,
-                transmission: 0.88,
-                transparent: true,
-                opacity: 0.65,
-                ior: 1.5,
-              });
-            }
-          }
-        });
-
-        // Configure initial gear visibility
-        updateGearVisibility(root, landingGearDeployed);
-
-        modelGroup.add(root);
-        setIsLoading(false);
-      },
-      (xhr) => {
-        if (xhr.total > 0) {
-          const pct = Math.round((xhr.loaded / xhr.total) * 100);
-          setLoadingProgress(pct);
-        }
-      },
-      (error) => {
-        console.error('Error loading F-22 GLB model:', error);
-        setLoadError('Failed to load 3D GLB model. Please check file path.');
-        setIsLoading(false);
-      }
-    );
-
-    // 8. Animation loop
+    // 8. Animation Loop
     const animate = () => {
       animFrameIdRef.current = requestAnimationFrame(animate);
 
       if (isAutoSpin && modelRootRef.current) {
-        modelRootRef.current.rotation.y += 0.006;
+        modelRootRef.current.rotation.y += 0.005;
       }
 
       controls.update();
@@ -241,14 +206,116 @@ export const ModelViewerModal: React.FC<ModelViewerModalProps> = ({
     };
   }, [isOpen]);
 
-  // Update lighting on preset change
+  // Load Selected GLB Model
+  useEffect(() => {
+    if (!isOpen || !sceneRef.current) return;
+    const scene = sceneRef.current;
+
+    // Clear old model
+    if (modelRootRef.current) {
+      scene.remove(modelRootRef.current);
+      modelRootRef.current = null;
+    }
+
+    setIsLoading(true);
+    setLoadingProgress(0);
+    setLoadError(null);
+
+    loadGlbAircraftModel(selectedModel, (pct) => setLoadingProgress(pct))
+      .then(({ root, metadata }) => {
+        modelRootRef.current = root;
+        scene.add(root);
+
+        // Count meshes and vertices
+        let mCount = 0;
+        let vCount = 0;
+        root.traverse((c) => {
+          if ((c as THREE.Mesh).isMesh) {
+            mCount++;
+            const g = (c as THREE.Mesh).geometry;
+            if (g && g.attributes.position) {
+              vCount += g.attributes.position.count;
+            }
+          }
+        });
+        setMeshCount(mCount);
+        setVertexCount(vCount);
+
+        // Apply active shading
+        if (shadingMode === 'cfdHeatmap') {
+          applyCfdPressureHeatmap(root, inspectorAoA, isStalled);
+        } else if (shadingMode === 'wireframe') {
+          applyWireframeShading(root, true);
+        }
+
+        setIsLoading(false);
+      })
+      .catch((err) => {
+        console.error('Error loading GLB in inspector:', err);
+        setLoadError(`Failed to load 3D CAD asset for ${selectedModel}.`);
+        setIsLoading(false);
+      });
+  }, [isOpen, selectedModel]);
+
+  // Update AoA Pitch & Heatmap in Inspector
+  useEffect(() => {
+    if (!modelRootRef.current) return;
+    const root = modelRootRef.current;
+
+    // Pitch model with AoA slider
+    const pitchRad = (inspectorAoA * Math.PI) / 180;
+    root.rotation.z = -pitchRad;
+
+    // Update heatmap if active
+    if (shadingMode === 'cfdHeatmap') {
+      applyCfdPressureHeatmap(root, inspectorAoA, isStalled);
+    }
+
+    // Update force vectors
+    if (forceVectorsRef.current) {
+      const liftSim_N = Math.sin(pitchRad + 0.08) * 1.8e6;
+      const dragSim_N = (0.02 + Math.pow(Math.sin(pitchRad), 2) * 0.8) * 4e5;
+      updateAeroForceVectors(forceVectorsRef.current, liftSim_N, dragSim_N, inspectorAoA, showForceVectors);
+    }
+  }, [inspectorAoA, isStalled, shadingMode, showForceVectors]);
+
+  // Update Shading Mode
+  useEffect(() => {
+    if (!modelRootRef.current) return;
+    const root = modelRootRef.current;
+
+    if (shadingMode === 'cfdHeatmap') {
+      applyCfdPressureHeatmap(root, inspectorAoA, isStalled);
+    } else if (shadingMode === 'wireframe') {
+      restoreOriginalGlbMaterials(root);
+      applyWireframeShading(root, true);
+    } else if (shadingMode === 'xray') {
+      root.traverse((child) => {
+        if ((child as THREE.Mesh).isMesh) {
+          (child as THREE.Mesh).material = new THREE.MeshPhysicalMaterial({
+            color: 0x00f0ff,
+            transparent: true,
+            opacity: 0.35,
+            roughness: 0.1,
+            metalness: 0.8,
+          });
+        }
+      });
+    } else {
+      restoreOriginalGlbMaterials(root);
+      applyWireframeShading(root, false);
+    }
+  }, [shadingMode, inspectorAoA, isStalled]);
+
+  // Lighting Update
   useEffect(() => {
     if (!lightsGroupRef.current) return;
     const lightsGroup = lightsGroupRef.current;
     lightsGroup.clear();
+
     if (lightingPreset === 'tunnel') {
-      lightsGroup.add(new THREE.AmbientLight(0x38bdf8, 0.6));
-      const key = new THREE.DirectionalLight(0xe0f2fe, 2.2);
+      lightsGroup.add(new THREE.AmbientLight(0x38bdf8, 0.65));
+      const key = new THREE.DirectionalLight(0xe0f2fe, 2.4);
       key.position.set(-15, 20, 15);
       lightsGroup.add(key);
       const rim = new THREE.DirectionalLight(0x0284c7, 1.8);
@@ -256,7 +323,7 @@ export const ModelViewerModal: React.FC<ModelViewerModalProps> = ({
       lightsGroup.add(rim);
     } else if (lightingPreset === 'studio') {
       lightsGroup.add(new THREE.AmbientLight(0xffffff, 1.2));
-      const key = new THREE.DirectionalLight(0xffffff, 2.5);
+      const key = new THREE.DirectionalLight(0xffffff, 2.8);
       key.position.set(10, 20, 10);
       lightsGroup.add(key);
       const fill = new THREE.DirectionalLight(0xf1f5f9, 1.5);
@@ -264,94 +331,34 @@ export const ModelViewerModal: React.FC<ModelViewerModalProps> = ({
       lightsGroup.add(fill);
     } else if (lightingPreset === 'sunset') {
       lightsGroup.add(new THREE.AmbientLight(0xf59e0b, 0.8));
-      const key = new THREE.DirectionalLight(0xf97316, 3.0);
+      const key = new THREE.DirectionalLight(0xf97316, 3.2);
       key.position.set(-20, 10, 5);
       lightsGroup.add(key);
-      const rim = new THREE.DirectionalLight(0x7c3aed, 1.6);
+      const rim = new THREE.DirectionalLight(0x7c3aed, 1.8);
       rim.position.set(20, -5, -10);
       lightsGroup.add(rim);
     } else {
       lightsGroup.add(new THREE.AmbientLight(0x06b6d4, 0.7));
-      const key = new THREE.DirectionalLight(0x00f0ff, 2.5);
+      const key = new THREE.DirectionalLight(0x00f0ff, 2.6);
       key.position.set(-15, 15, 10);
       lightsGroup.add(key);
-      const rim = new THREE.DirectionalLight(0xf43f5e, 2.5);
+      const rim = new THREE.DirectionalLight(0xf43f5e, 2.6);
       rim.position.set(15, -10, -15);
       lightsGroup.add(rim);
     }
   }, [lightingPreset]);
 
-  // Update wireframe mode
-  useEffect(() => {
-    if (!modelRootRef.current) return;
-    modelRootRef.current.traverse((child) => {
-      if ((child as THREE.Mesh).isMesh) {
-        const mat = (child as THREE.Mesh).material;
-        if (Array.isArray(mat)) {
-          mat.forEach((m) => {
-            if ('wireframe' in m) (m as THREE.MeshStandardMaterial).wireframe = wireframeMode;
-          });
-        } else if (mat && 'wireframe' in mat) {
-          (mat as THREE.MeshStandardMaterial).wireframe = wireframeMode;
-        }
-      }
-    });
-  }, [wireframeMode]);
-
-  // Helper: toggle gear nodes
-  const updateGearVisibility = (root: THREE.Object3D, deployed: boolean) => {
-    root.traverse((obj) => {
-      // Object_14 is landingOff (retracted)
-      if (obj.name === 'Object_14' || obj.name === 'F-22-landingOff_5') {
-        obj.visible = !deployed;
-      }
-      // Object_16 and Object_18 are landingOn (deployed gear & lights)
-      if (
-        obj.name === 'Object_16' ||
-        obj.name === 'F-22-landingOn_6' ||
-        obj.name === 'Object_18' ||
-        obj.name === 'F-22-landingOnLight_7'
-      ) {
-        obj.visible = deployed;
-      }
-    });
-  };
-
-  // Update landing gear
-  useEffect(() => {
-    if (!modelRootRef.current) return;
-    updateGearVisibility(modelRootRef.current, landingGearDeployed);
-  }, [landingGearDeployed]);
-
-  // Update component visibility
-  useEffect(() => {
-    if (!modelRootRef.current) return;
-    modelRootRef.current.traverse((obj) => {
-      if (obj.name === 'Object_4' || obj.name === 'F-22-airframe_0') {
-        obj.visible = componentVisibility.airframe;
-      } else if (obj.name === 'Object_6' || obj.name === 'F-22-canopy_1') {
-        obj.visible = componentVisibility.canopy;
-      } else if (obj.name === 'Object_8' || obj.name === 'F-22-cockpit_2') {
-        obj.visible = componentVisibility.cockpit;
-      } else if (obj.name === 'Object_10' || obj.name === 'F-22-hud_3') {
-        obj.visible = componentVisibility.hud;
-      } else if (obj.name === 'Object_12' || obj.name === 'F-22-instrGlass_4') {
-        obj.visible = componentVisibility.instrGlass;
-      }
-    });
-  }, [componentVisibility]);
-
-  // Screenshot capture
+  // Take PNG Snapshot
   const handleTakeSnapshot = () => {
     if (!rendererRef.current) return;
     const dataUrl = rendererRef.current.domElement.toDataURL('image/png');
     const a = document.createElement('a');
     a.href = dataUrl;
-    a.download = `f22-raptor-3d-cad-${Date.now()}.png`;
+    a.download = `${selectedModel}-3d-cad-inspector-${Date.now()}.png`;
     a.click();
   };
 
-  // Reset camera view
+  // Reset Camera View
   const handleResetCamera = () => {
     if (!cameraRef.current || !controlsRef.current) return;
     cameraRef.current.position.set(16, 8, 16);
@@ -361,12 +368,14 @@ export const ModelViewerModal: React.FC<ModelViewerModalProps> = ({
 
   if (!isOpen) return null;
 
+  const currentMeta = GLB_MODEL_REGISTRY[selectedModel];
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/85 backdrop-blur-xl animate-fade-in">
-      <div className="relative w-full max-w-6xl h-[90vh] bg-slate-900/90 border border-cyan-500/40 rounded-3xl shadow-[0_0_50px_rgba(6,182,212,0.25)] flex flex-col overflow-hidden text-slate-100">
+      <div className="relative w-full max-w-6xl h-[92vh] bg-slate-900/90 border border-cyan-500/40 rounded-3xl shadow-[0_0_60px_rgba(6,182,212,0.25)] flex flex-col overflow-hidden text-slate-100">
         
         {/* Top Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-cyan-500/20 bg-slate-950/60">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-cyan-500/20 bg-slate-950/70">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-cyan-950/80 border border-cyan-400/50 flex items-center justify-center text-cyan-300 shadow-[0_0_15px_rgba(6,182,212,0.4)]">
               <Box className="w-5 h-5 animate-pulse" />
@@ -374,17 +383,19 @@ export const ModelViewerModal: React.FC<ModelViewerModalProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-base sm:text-lg font-bold font-sans tracking-wide text-white">
-                  F-22 Raptor — 3D CAD Asset Inspector
+                  3D CAD Asset Inspector
                 </h2>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-400/30">
                   GLTF 2.0 Binary
                 </span>
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
-                  26.5 MB PBR
-                </span>
+                {currentMeta && (
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
+                    {currentMeta.fileSizeLabel}
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-400">
-                High-Fidelity Airframe by bohmerang · Sketchfab CC-BY-NC-SA 4.0
+                {currentMeta ? currentMeta.sourceCredit : 'High-fidelity aerodynamic CAD meshes'}
               </p>
             </div>
           </div>
@@ -408,6 +419,38 @@ export const ModelViewerModal: React.FC<ModelViewerModalProps> = ({
           </div>
         </div>
 
+        {/* Model Tabs Bar */}
+        <div className="px-6 py-2.5 bg-slate-950/50 border-b border-cyan-500/15 flex items-center gap-2 overflow-x-auto custom-scrollbar">
+          <span className="text-xs font-mono font-bold text-slate-400 mr-2 flex items-center gap-1">
+            <Plane className="w-3.5 h-3.5 text-cyan-400" />
+            SELECT MODEL:
+          </span>
+          {[
+            { id: 'f22', label: 'F-22 Raptor', tag: 'Stealth Fighter' },
+            { id: 'airliner', label: 'Boeing 787', tag: 'Airliner CAD' },
+            { id: 'concorde', label: 'Concorde SST', tag: 'Supersonic' },
+            { id: 'naca2412', label: 'Airfoil Section', tag: '3D Wing' },
+          ].map((m) => (
+            <button
+              key={m.id}
+              onClick={() => {
+                setSelectedModel(m.id as AircraftModelType);
+                if (onSelectModel) onSelectModel(m.id as AircraftModelType);
+              }}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all border ${
+                selectedModel === m.id
+                  ? 'bg-cyan-950/80 text-cyan-200 border-cyan-400/70 shadow-[0_0_12px_rgba(6,182,212,0.3)]'
+                  : 'bg-slate-900/60 text-slate-400 border-slate-800 hover:text-white hover:border-slate-700'
+              }`}
+            >
+              <span>{m.label}</span>
+              <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-black/40 text-cyan-400/80">
+                {m.tag}
+              </span>
+            </button>
+          ))}
+        </div>
+
         {/* Main Body */}
         <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
           
@@ -418,18 +461,20 @@ export const ModelViewerModal: React.FC<ModelViewerModalProps> = ({
             {/* Loading Indicator */}
             {isLoading && (
               <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/80 backdrop-blur-md gap-4 z-10">
-                <div className="w-14 h-14 rounded-full border-2 border-cyan-500/20 border-t-cyan-400 animate-spin" />
+                <div className="w-14 h-14 rounded-full border-2 border-cyan-500/20 border-t-cyan-400 animate-spin shadow-[0_0_20px_rgba(6,182,212,0.4)]" />
                 <div className="flex flex-col items-center gap-1.5">
                   <span className="text-sm font-semibold text-cyan-100 font-mono">
-                    Loading High-Res 3D Jet Asset... {loadingProgress}%
+                    Loading {currentMeta ? currentMeta.name : '3D CAD Model'}... {loadingProgress}%
                   </span>
                   <div className="w-48 h-2 rounded-full bg-slate-800 overflow-hidden border border-cyan-500/30">
                     <div 
-                      className="h-full bg-gradient-to-r from-cyan-500 to-sky-400 transition-all duration-200"
+                      className="h-full bg-gradient-to-r from-cyan-500 via-sky-400 to-emerald-400 transition-all duration-200"
                       style={{ width: `${Math.max(5, loadingProgress)}%` }}
                     />
                   </div>
-                  <span className="text-[11px] text-slate-400">Parsing 26.57 MB textures & meshes</span>
+                  <span className="text-[11px] text-slate-400 font-mono">
+                    {currentMeta ? currentMeta.fileSizeLabel : 'Parsing geometry & textures'}
+                  </span>
                 </div>
               </div>
             )}
@@ -455,17 +500,6 @@ export const ModelViewerModal: React.FC<ModelViewerModalProps> = ({
                   <span>Turntable</span>
                 </button>
                 <button
-                  onClick={() => setWireframeMode(!wireframeMode)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                    wireframeMode
-                      ? 'bg-cyan-500/30 text-cyan-200 border border-cyan-400/40 shadow-sm'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  <Layers className="w-3.5 h-3.5" />
-                  <span>Wireframe</span>
-                </button>
-                <button
                   onClick={handleResetCamera}
                   className="px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-800 transition-all"
                 >
@@ -479,83 +513,112 @@ export const ModelViewerModal: React.FC<ModelViewerModalProps> = ({
             </div>
           </div>
 
-          {/* Right Inspector & Metadata Panel */}
-          <div className="w-full lg:w-80 border-t lg:border-t-0 lg:border-l border-cyan-500/20 bg-slate-950/70 p-5 flex flex-col gap-5 overflow-y-auto max-h-[45vh] lg:max-h-full">
+          {/* Right Inspector & Aerodynamic Overlays Panel */}
+          <div className="w-full lg:w-88 border-t lg:border-t-0 lg:border-l border-cyan-500/20 bg-slate-950/70 p-5 flex flex-col gap-4 overflow-y-auto max-h-[48vh] lg:max-h-full custom-scrollbar">
             
-            {/* 1. Sub-mesh Hierarchy Controls */}
+            {/* 1. Aerodynamic Analysis Overlays (Heatmap & Vectors) */}
             <div className="flex flex-col gap-2.5">
               <div className="flex items-center justify-between text-xs font-bold text-slate-200 uppercase tracking-wider font-sans">
                 <span className="flex items-center gap-1.5">
-                  <Layers className="w-3.5 h-3.5 text-cyan-400" />
-                  CAD Mesh Hierarchy
+                  <Activity className="w-3.5 h-3.5 text-cyan-400" />
+                  Aerodynamic Surface Analysis
                 </span>
-                <span className="text-[10px] text-cyan-400 font-mono">52k Verts</span>
+                <span className="text-[10px] text-cyan-400 font-mono">CFD Mesh</span>
               </div>
 
-              <div className="flex flex-col gap-1.5">
+              {/* Shading mode selector */}
+              <div className="grid grid-cols-2 gap-1.5">
                 {[
-                  { key: 'airframe', name: 'Airframe & Wings', verts: '33,837' },
-                  { key: 'canopy', name: 'Glass Canopy', verts: '84' },
-                  { key: 'cockpit', name: 'Cockpit Interior', verts: '1,908' },
-                  { key: 'hud', name: 'HUD Avionics Display', verts: '20' },
-                  { key: 'instrGlass', name: 'Instrument Glass', verts: '84' },
-                ].map((item) => (
+                  { id: 'pbr', label: 'PBR Shading', desc: 'Photorealistic textures' },
+                  { id: 'cfdHeatmap', label: 'CFD Pressure', desc: 'Cp surface heatmap' },
+                  { id: 'wireframe', label: 'Wireframe', desc: 'Structural mesh polygons' },
+                  { id: 'xray', label: 'X-Ray Translucent', desc: 'Internal diagnostic' },
+                ].map((s) => (
                   <button
-                    key={item.key}
-                    onClick={() =>
-                      setComponentVisibility((prev) => ({
-                        ...prev,
-                        [item.key]: !prev[item.key],
-                      }))
-                    }
-                    className={`px-3 py-2 rounded-xl text-xs font-medium flex items-center justify-between transition-all border ${
-                      componentVisibility[item.key]
-                        ? 'bg-slate-800/80 border-cyan-500/30 text-slate-200'
-                        : 'bg-slate-900/40 border-slate-800 text-slate-500 line-through'
+                    key={s.id}
+                    onClick={() => setShadingMode(s.id as any)}
+                    className={`p-2 rounded-xl text-left flex flex-col transition-all border ${
+                      shadingMode === s.id
+                        ? 'bg-cyan-950/80 border-cyan-400/60 text-cyan-100 shadow-[0_0_10px_rgba(6,182,212,0.3)]'
+                        : 'bg-slate-900/50 border-slate-800 text-slate-400 hover:text-white'
                     }`}
                   >
-                    <span>{item.name}</span>
-                    <span className="text-[10px] font-mono text-cyan-400/80">{item.verts} v</span>
+                    <span className="text-xs font-bold">{s.label}</span>
+                    <span className="text-[10px] text-slate-400">{s.desc}</span>
                   </button>
                 ))}
               </div>
+
+              {/* Angle of Attack Pitch Slider */}
+              <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 flex flex-col gap-2">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-slate-300 font-medium">Test Angle of Attack (AoA):</span>
+                  <span className="font-mono text-cyan-300 font-bold">{inspectorAoA.toFixed(1)}°</span>
+                </div>
+                <input
+                  type="range"
+                  min="-10"
+                  max="28"
+                  step="0.5"
+                  value={inspectorAoA}
+                  onChange={(e) => setInspectorAoA(parseFloat(e.target.value))}
+                  className="w-full accent-cyan-400 cursor-pointer"
+                />
+                <div className="flex justify-between items-center text-[10px] text-slate-400">
+                  <span>-10°</span>
+                  <button
+                    onClick={() => setIsStalled(!isStalled)}
+                    className={`px-2 py-0.5 rounded text-[10px] font-bold font-mono transition-all ${
+                      isStalled
+                        ? 'bg-red-500/30 text-red-200 border border-red-500/50'
+                        : 'bg-slate-800 text-slate-400'
+                    }`}
+                  >
+                    {isStalled ? '⚠️ STALL ACTIVE' : 'Stall Normal'}
+                  </button>
+                  <span>+28°</span>
+                </div>
+              </div>
             </div>
 
-            {/* 2. Landing Gear Config */}
-            <div className="flex flex-col gap-2.5">
+            {/* 2. Force Vectors Toggle */}
+            <div className="flex flex-col gap-2">
               <span className="text-xs font-bold text-slate-200 uppercase tracking-wider font-sans flex items-center gap-1.5">
-                <Compass className="w-3.5 h-3.5 text-cyan-400" />
-                Landing Gear Configuration
+                <Wind className="w-3.5 h-3.5 text-cyan-400" />
+                3D Force Vectors Overlay
               </span>
               <div className="grid grid-cols-2 gap-2">
                 <button
-                  onClick={() => setLandingGearDeployed(false)}
-                  className={`py-2 px-3 rounded-xl text-xs font-semibold transition-all border ${
-                    !landingGearDeployed
+                  onClick={() => setShowForceVectors(!showForceVectors)}
+                  className={`py-2 px-3 rounded-xl text-xs font-semibold transition-all border flex items-center justify-center gap-1.5 ${
+                    showForceVectors
                       ? 'bg-cyan-500/30 text-cyan-100 border-cyan-400/50 shadow-sm'
                       : 'bg-slate-900/60 text-slate-400 border-slate-800 hover:text-white'
                   }`}
                 >
-                  🛫 Retracted (Flight)
+                  <Activity className="w-3.5 h-3.5" />
+                  <span>{showForceVectors ? 'Vectors Visible' : 'Vectors Hidden'}</span>
                 </button>
+
                 <button
-                  onClick={() => setLandingGearDeployed(true)}
-                  className={`py-2 px-3 rounded-xl text-xs font-semibold transition-all border ${
+                  onClick={() => setLandingGearDeployed(!landingGearDeployed)}
+                  className={`py-2 px-3 rounded-xl text-xs font-semibold transition-all border flex items-center justify-center gap-1.5 ${
                     landingGearDeployed
-                      ? 'bg-cyan-500/30 text-cyan-100 border-cyan-400/50 shadow-sm'
+                      ? 'bg-amber-500/20 text-amber-200 border-amber-400/40'
                       : 'bg-slate-900/60 text-slate-400 border-slate-800 hover:text-white'
                   }`}
                 >
-                  🛬 Deployed (Ground)
+                  <Compass className="w-3.5 h-3.5" />
+                  <span>{landingGearDeployed ? 'Gear: Down' : 'Gear: Up'}</span>
                 </button>
               </div>
             </div>
 
             {/* 3. Studio Lighting Atmosphere */}
-            <div className="flex flex-col gap-2.5">
+            <div className="flex flex-col gap-2">
               <span className="text-xs font-bold text-slate-200 uppercase tracking-wider font-sans flex items-center gap-1.5">
                 <Sun className="w-3.5 h-3.5 text-amber-400" />
-                Chamber Lighting
+                Lighting Environment
               </span>
               <div className="grid grid-cols-2 gap-1.5">
                 {[
@@ -586,32 +649,28 @@ export const ModelViewerModal: React.FC<ModelViewerModalProps> = ({
                 <span className="font-mono text-cyan-300">GLTF 2.0 Binary (.glb)</span>
               </div>
               <div className="flex justify-between">
-                <span>File Size:</span>
-                <span className="font-mono text-cyan-300">26.57 MB</span>
-              </div>
-              <div className="flex justify-between">
                 <span>Total Meshes:</span>
-                <span className="font-mono text-cyan-300">8 Primitives</span>
+                <span className="font-mono text-cyan-300">{meshCount > 0 ? `${meshCount} Groups` : currentMeta?.meshCountLabel}</span>
               </div>
               <div className="flex justify-between">
-                <span>Fuselage Length:</span>
-                <span className="font-mono text-cyan-300">18.90 m</span>
+                <span>Vertices:</span>
+                <span className="font-mono text-cyan-300">{vertexCount > 0 ? vertexCount.toLocaleString() : '52,400+'}</span>
               </div>
               <div className="flex justify-between">
                 <span>Wingspan:</span>
-                <span className="font-mono text-cyan-300">13.56 m</span>
+                <span className="font-mono text-cyan-300">{AIRCRAFT_MODELS[selectedModel]?.wingspan} m</span>
               </div>
 
               {onApplyToWindTunnel && (
                 <button
                   onClick={() => {
-                    onApplyToWindTunnel({ landingGear: landingGearDeployed });
+                    onApplyToWindTunnel({ modelType: selectedModel, landingGear: landingGearDeployed });
                     onClose();
                   }}
                   className="w-full mt-2 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-sky-400 text-slate-950 font-bold text-xs shadow-[0_0_20px_rgba(6,182,212,0.4)] hover:brightness-110 transition-all flex items-center justify-center gap-1.5"
                 >
                   <Check className="w-4 h-4" />
-                  <span>Apply &amp; Return to Wind Tunnel</span>
+                  <span>Apply to Wind Tunnel &amp; Return</span>
                 </button>
               )}
             </div>

@@ -5,7 +5,7 @@ export const AIRCRAFT_MODELS: Record<AircraftModelType, AircraftModelConfig> = {
     id: 'f22',
     name: 'F-22 Raptor (Fighter)',
     category: 'Fighter',
-    description: 'Stealth air dominance fighter with chined forebody, razor-thin delta section, and vortex lift at high AoA.',
+    description: 'Stealth air dominance fighter with chined forebody, razor-thin diamond wing section, and vortex lift at high AoA.',
     wingspan: 13.56,
     chord: 4.8,
     stallAngle: 22,
@@ -14,7 +14,7 @@ export const AIRCRAFT_MODELS: Record<AircraftModelType, AircraftModelConfig> = {
     cd0: 0.019,
     flapCapable: false,
     supersonicCapable: true,
-    glbPath: '/models/f-22_raptor_-_fighter_jet_-_free.glb',
+    glbPath: '/models/f22_raptor.glb',
     hasGlbModel: true,
   },
   airliner: {
@@ -30,10 +30,12 @@ export const AIRCRAFT_MODELS: Record<AircraftModelType, AircraftModelConfig> = {
     cd0: 0.024,
     flapCapable: true,
     supersonicCapable: false,
+    glbPath: '/models/boeing_787.glb',
+    hasGlbModel: true,
   },
   naca2412: {
     id: 'naca2412',
-    name: 'NACA 2412 (Cambered Wing)',
+    name: 'Airfoil Section (NACA 2412)',
     category: 'Airfoil',
     description: 'Classic cambered aviation airfoil (Cessna 172). 2% max camber at 40% chord with 12% thickness. Positive lift at 0° AoA.',
     wingspan: 11.0,
@@ -44,6 +46,8 @@ export const AIRCRAFT_MODELS: Record<AircraftModelType, AircraftModelConfig> = {
     cd0: 0.008,
     flapCapable: true,
     supersonicCapable: false,
+    glbPath: '/models/airfoil.glb',
+    hasGlbModel: true,
   },
   naca0012: {
     id: 'naca0012',
@@ -58,6 +62,8 @@ export const AIRCRAFT_MODELS: Record<AircraftModelType, AircraftModelConfig> = {
     cd0: 0.007,
     flapCapable: true,
     supersonicCapable: false,
+    glbPath: '/models/airfoil.glb',
+    hasGlbModel: true,
   },
   concorde: {
     id: 'concorde',
@@ -72,6 +78,8 @@ export const AIRCRAFT_MODELS: Record<AircraftModelType, AircraftModelConfig> = {
     cd0: 0.015,
     flapCapable: false,
     supersonicCapable: true,
+    glbPath: '/models/concorde_free_with_interior.glb',
+    hasGlbModel: true,
   },
   cylinder: {
     id: 'cylinder',

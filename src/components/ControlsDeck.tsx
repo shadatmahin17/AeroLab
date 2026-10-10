@@ -196,8 +196,8 @@ export const ControlsDeck: React.FC<ControlsDeckProps> = ({
           })}
         </div>
 
-        {/* F-22 GLB 3D Asset Action & Controls Banner */}
-        {params.modelType === 'f22' && (
+        {/* 3D GLB Asset Action & Controls Banner */}
+        {currentModel.hasGlbModel && (
           <div className="p-3.5 rounded-xl bg-gradient-to-r from-cyan-950/50 via-slate-900/60 to-emerald-950/40 border border-cyan-500/30 flex flex-wrap items-center justify-between gap-3 shadow-inner">
             <div className="flex items-center gap-2.5">
               <div className="w-8 h-8 rounded-lg bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center text-cyan-300 shadow-[0_0_12px_rgba(6,182,212,0.3)]">
@@ -206,31 +206,39 @@ export const ControlsDeck: React.FC<ControlsDeckProps> = ({
               <div>
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-bold text-white">
-                    Photorealistic 3D GLB Model
+                    3D GLB CAD Model Active
                   </span>
                   <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
-                    26.5 MB PBR
+                    {params.modelType === 'airliner'
+                      ? '11.0 MB CAD'
+                      : params.modelType === 'concorde'
+                      ? '5.8 MB PBR'
+                      : params.modelType === 'naca2412'
+                      ? '11.4 KB Mesh'
+                      : '26.5 MB PBR'}
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-400">
-                  Sketchfab CAD mesh by bohmerang · CC-BY-NC-SA 4.0
+                  Surface pressure heatmap, streamlines &amp; force vectors
                 </p>
               </div>
             </div>
 
             <div className="flex items-center gap-2">
-              {/* Landing Gear Quick Toggle */}
-              <button
-                onClick={() => onParamChange('landingGear', !params.landingGear)}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
-                  params.landingGear
-                    ? 'bg-amber-500/20 text-amber-200 border-amber-400/40'
-                    : 'bg-slate-800/80 text-slate-300 border-slate-700 hover:text-white'
-                }`}
-                title="Toggle landing gear configuration"
-              >
-                {params.landingGear ? '🛬 Gear: Deployed' : '🛫 Gear: Retracted'}
-              </button>
+              {/* Landing Gear Quick Toggle (for aircraft models) */}
+              {(params.modelType === 'f22' || params.modelType === 'airliner' || params.modelType === 'concorde') && (
+                <button
+                  onClick={() => onParamChange('landingGear', !params.landingGear)}
+                  className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+                    params.landingGear
+                      ? 'bg-amber-500/20 text-amber-200 border-amber-400/40'
+                      : 'bg-slate-800/80 text-slate-300 border-slate-700 hover:text-white'
+                  }`}
+                  title="Toggle landing gear configuration"
+                >
+                  {params.landingGear ? '🛬 Gear: Deployed' : '🛫 Gear: Retracted'}
+                </button>
+              )}
 
               {/* Inspect 3D CAD Model Button */}
               {onOpenModelInspector && (

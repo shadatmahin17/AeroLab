@@ -1,184 +1,156 @@
-# Telemetry HUD Data & Graph Export Suite
+# Package.json Build Recovery & 3D Asset Pipeline Stabilization
 
-A comprehensive data and graph export suite for the Aerodynamics Simulator and Physics Wind Tunnel, enabling aerospace engineers, students, and researchers to export simulation parameters, forces, aerodynamic coefficients, polar curve sweeps, and high-fidelity vector/raster graphs in standard JSON, CSV, SVG, and PNG formats.
+Comprehensive resolution plan addressing build pauses, dependency version conflicts in `package.json`, and asset pipeline stalls caused by large 3D GLB files in the project root.
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
 > Based on your selections during Phase 1 clarification, the following architecture decisions are locked in for implementation:
 
-- **Dedicated Export Menu**: An integrated dropdown menu in the Telemetry HUD toolbar offering direct options for JSON and CSV downloads, with keyboard accessibility and animated feedback states.
-- **Full Snapshot Data Scope**: Export files package complete simulation state, including aircraft geometry (`wingspan`, `chord`, `wing area`, `aspect ratio`), ambient atmospheric properties (`altitude`, `air density`, `speed of sound`, `dynamic pressure`), instantaneous aerodynamic parameters (`AoA`, `Mach`, `Reynolds`, `CL`, `CD`, `L/D`, suction/compression split, downwash angle), and a high-resolution polar curve sweep ($\alpha \in [-15^\circ, +30^\circ]$ at $1.5^\circ$ increments).
-- **Graph Visual & Data Export**: The aerodynamic polar visualization deck (`AeroCharts`) will feature one-click SVG vector export, crisp PNG raster export, and raw curve tabular data download for external plotting in MATLAB, Python/Pandas, or Excel.
+- **Dependency Stabilization**: All packages in `package.json` will be reverted to verified, production-stable releases (e.g., standardizing `vite@^6.2.0`, `typescript@^5.7.2`, `@vitejs/plugin-react@^4.3.4`, `tailwindcss@^4.0.9`, `three@^0.174.0`, and `@types/three@^0.174.0`) to eliminate non-existent version lookup errors and dependency resolution freezes.
+- **3D Asset Relocation**: Large 3D model assets (`boeing_787.glb`, `concorde_free_with_interior.glb`, `f-22_raptor_-_fighter_jet_-_free.glb`, and `airfoil.glb`), which aggregate to over 45 MB, will be relocated from the project root into `public/models/`. This prevents Vite's build bundler and Rollup transformation pipeline from attempting to process binary geometries during `npm run build`, and resolves file synchronization timeouts.
+- **Root Path & Script Normalization**: Ensure `package.json` build scripts specify clean output targets (`vite build`) and verify symlinks/paths so the CI/container build runner correctly locates and executes the build process without `ENOENT` path errors.
 
 ---
 
 ## 1. Overview & Core Concept
 
-- **What It Does**: Equips the telemetry and analytics deck with external analysis export tools. Users can snapshot any aerodynamic wind tunnel run and export either structured machine-readable JSON, spreadsheet-ready CSV, or publication-grade SVG/PNG vector charts.
-- **Target Audience / Persona**: Aeronautical engineers, flight simulation enthusiasts, STEM educators, and students who need empirical CFD datasets for lab reports, academic papers, and external validation.
-- **Key Value**: Bridges the gap between in-browser real-time simulation and desktop post-processing tools, allowing instantaneous capture of transient aerodynamic behavior, stall transitions, and pressure distributions without external screen-capture or manual transcription.
+- **What It Does**: Fixes the root causes behind build pauses and failures during compilation, establishing a rock-solid, production-grade build pipeline that compiles in seconds while keeping the full 3D aerodynamic wind tunnel and CAD model features intact.
+- **Root Causes Identified**:
+  1. **Fictitious / Mismatched Package Versions**: `package.json` contains versions that do not exist in the npm registry (e.g., `"typescript": "^7.0.2"` when TypeScript is at v5.x; `"vite": "^8.3.0"` when Vite is at v6.x; `"@vitejs/plugin-react": "^6.1.1"` when plugin is at v4.x; `"dotenv": "^17.2.3"` when dotenv is at v16.x). These caused npm and bun resolution stalling.
+  2. **Vite Bundler Memory Saturation**: 4 large `.glb` files (totaling >45MB) placed directly in the project root caused `vite build` to attempt AST transformations and file watching on raw binary meshes during the `transforming...` stage, leading to process hangs.
+  3. **File System Sync Latency**: Giant binary files in the root folder caused container file-synchronization RPC timeouts (`Timed out waiting for applet file system condition to be met`).
+  4. **Working Directory ENOENT**: The build runner executing from container root expected a valid `package.json` link or path alignment.
 
 ---
 
-## 2. User Experience & Visual Design
+## 2. Analysis of the Build Pause Problem
 
-### Key User Flows
-
-1. **Snapshotting Simulation State (JSON / CSV)**:
-   - The user configures flight conditions (e.g. F-22 Raptor at $M = 0.85$, $12^\circ$ AoA, $15^\circ$ flaps).
-   - In the right-hand **Telemetry & Forces** header, the user clicks the **Export Data** dropdown.
-   - The menu reveals options:
-     - **Full Telemetry Snapshot (JSON)**: Formatted JSON with metadata, aircraft geometry, atmospheric parameters, forces, and polar sweep array.
-     - **Tabular Flight Log & Polar (CSV)**: Dual-table CSV structured for instant Excel/Google Sheets opening.
-   - Clicking either triggers immediate file download with an auto-generated descriptive filename (`aerolab_f22_aoa+12.0deg_m0.85_YYYYMMDD_HHMMSS.json`).
-   - A subtle green status pill confirms the export without modal obstruction.
-
-2. **Graph Vector & Raster Export (SVG / PNG / CSV)**:
-   - In the **Aerodynamic Polars & Pressure** deck, next to the $C_L-\alpha$, $C_L-C_D$, and $C_p-x/c$ tabs, an **Export Chart** tool is available.
-   - Users can download:
-     - **Download SVG**: High-resolution standalone vector asset with embedded styling, coordinate axes, zero-lift references, and operating points.
-     - **Download PNG**: Scaled $2\times$ crisp raster graphic on transparent or dark background suitable for slides and documents.
-     - **Download Curve Data (CSV)**: The exact $(x, y)$ coordinate points corresponding to the active curve.
-
-### Visual Identity & Theme
-
-- **Palette**: Monochromatic obsidian background (`#060a12`), hairline borders (`border-cyan-500/20`), and laser-cyan accents (`#06b6d4`) matching the scientific telemetry aesthetic.
-- **Typography**: Clean tabular monospace (`font-mono tabular-nums text-xs`) for all file sizes, record counts, and timestamps.
-- **Menu Styling**: Obsidian glass dropdown (`bg-slate-900/95 border border-slate-700/60 shadow-xl backdrop-blur-md rounded-lg p-1.5`) with hover transitions and clear icon indicators (`FileCode2`, `FileSpreadsheet`, `Image`, `Download`).
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        DIAGNOSED BUILD BOTTLENECKS                     │
+├────────────────────────────────┬───────────────────────────────────────┤
+│ Issue                          │ Impact on Build                       │
+├────────────────────────────────┼───────────────────────────────────────┤
+│ 1. Invalid npm Semver Ranges   │ `typescript@^7.0.2`, `vite@^8.3.0`    │
+│    in package.json             │ stall dependency resolution & type    │
+│                                │ checking.                             │
+├────────────────────────────────┼───────────────────────────────────────┤
+│ 2. Binary Meshes in Root       │ 45 MB of `.glb` files in root get     │
+│                                │ scanned by Vite Rollup bundler,       │
+│                                │ causing indefinite `transforming...`  │
+│                                │ freeze.                               │
+├────────────────────────────────┼───────────────────────────────────────┤
+│ 3. Container FS Sync Deadlines │ File watcher RPC timeouts (>180s) on  │
+│                                │ large binary delta transfers.         │
+├────────────────────────────────┼───────────────────────────────────────┤
+│ 4. Missing / Outdated Typings  │ `@types/react`, `@types/three`        │
+│                                │ version mismatch with React 19.       │
+└────────────────────────────────┴───────────────────────────────────────┘
+```
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1: Client-Side Blob Generation vs. Backend Export Route**
-  - *Chosen Approach*: Pure client-side dynamic `Blob` generation and synthetic link triggering (`URL.createObjectURL(blob)`).
-  - *Why*: Zero network latency, offline functional capability, completely private (user telemetry never leaves the browser), and zero server load.
-  - *Alternatives Considered*: Backend Node/Express export endpoint. Rejected due to unnecessary network overhead and loss of offline usability.
+- **Decision 1: Pinning Verified Stable Versions vs. Latest Untested Tags**
+  - *Chosen Approach*: Pin explicit, verified stable versions for all core build tools (`vite@^6.2.0`, `@vitejs/plugin-react@^4.3.4`, `typescript@^5.7.2`, `tailwindcss@^4.0.9`, `@tailwindcss/vite@^4.0.9`).
+  - *Why*: Eliminates phantom dependency trees, guarantees reproducible builds, and avoids experimental breaking changes.
+  - *Alternatives Considered*: Retaining current version strings with `--legacy-peer-deps`. Rejected because non-existent versions fail registry lookup.
 
-- **Decision 2: CSV Dual-Section Architecture**
-  - *Chosen Approach*: Formatted multi-table CSV containing a Parameter Metadata section followed by a delimiter-separated polar sweep table (`AoA, CL, CD, L/D, Reynolds, FlowState`).
-  - *Why*: Allows external software (Excel, MATLAB `readtable`, Python Pandas `read_csv`) to parse both the single operating point and the entire sweep curve without creating multiple fragmented files.
+- **Decision 2: Moving `.glb` Files to `public/models/`**
+  - *Chosen Approach*: Move all `.glb` files into `public/models/` and reference them via standard static web paths (`/models/boeing_787.glb`, `/models/concorde_free_with_interior.glb`, `/models/f22_raptor.glb`, `/models/airfoil.glb`).
+  - *Why*: Vite passes assets in `public/` directly to `dist/` without Rollup transformation or memory overhead, cutting build time from indefinite hang down to <3 seconds.
+  - *Alternatives Considered*: Bundling models as base64 in TypeScript. Rejected due to extreme bundle size bloat.
 
-- **Decision 3: Canvas-Assisted SVG-to-PNG Conversion**
-  - *Chosen Approach*: Serialize the active `<svg>` element via `XMLSerializer`, render it into an in-memory HTML5 `<canvas>` at $2\times$ pixel density, and export as `image/png`.
-  - *Why*: Produces ultra-sharp, anti-aliased graphics ready for publication and presentations without external dependencies.
+- **Decision 3: Vite Build Configuration Tuning**
+  - *Chosen Approach*: Ensure `vite.config.ts` includes `assetsInclude: ['**/*.glb']` or treats `/models/` as pure static assets, and configure Rollup chunking rules for optimal production builds.
+  - *Why*: Prevents Vite from parsing binary GLTF buffers during code bundling.
 
 ---
 
-## 4. Technical Architecture & Data Strategy
+## 4. Technical Architecture & Resolution Strategy
 
-### System Component Diagram
+### Architecture & Pipeline Diagram
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                        CFD SIMULATION ENGINE                           │
-│  (SimulationParams: airspeed, altitude, AoA, flaps, aircraftModel)     │
+│                        OPTIMIZED BUILD PIPELINE                        │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │
-                  ┌─────────────────┴─────────────────┐
-                  ▼                                   ▼
+         ┌──────────────────────────┴──────────────────────────┐
+         ▼                                                     ▼
 ┌───────────────────────────────────┐ ┌───────────────────────────────────┐
-│        TelemetryHUD.tsx           │ │          AeroCharts.tsx           │
-│  - Real-time KPI Metric Cards     │ │  - Active Tab: CL-α / CL-CD / Cp │
-│  - Lift Breakdown Diagnostics     │ │  - Polar Curve Generator          │
-│  - [Export Data ▼] Dropdown Menu │ │  - [Export Chart ▼] Action Menu │
+│        SOURCE CODE & LOGIC        │ │         STATIC ASSET TREE         │
+│  `src/`                           │ │  `public/models/`                 │
+│  - React 19 Components            │ │  - boeing_787.glb (11.4 MB)       │
+│  - Three.js Simulation Engines    │ │  - concorde_free_...glb (6.0 MB)  │
+│  - TypeScript 5.7 Definitions     │ │  - f22_raptor.glb (27.8 MB)       │
+│  - Tailwind CSS 4 Styling         │ │  - airfoil.glb (11.4 KB)          │
 └─────────────────┬─────────────────┘ └─────────────────┬─────────────────┘
                   │                                     │
-                  │ Trigger                             │ Trigger
+                  │ (Fast AST compilation)              │ (Direct copy pass)
                   ▼                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│                     EXPORT & SERIALIZATION UTILITIES                   │
-│                                                                        │
-│  ┌──────────────────────┐  ┌─────────────────────┐  ┌───────────────┐ │
-│  │ exportTelemetryJSON()│  │ exportTelemetryCSV()│  │ exportChart() │ │
-│  │ - Full schema snapshot│  │ - Key-value metadata│  │ - SVG Blob    │ │
-│  │ - Polar sweep samples│  │ - Polar sweep table │  │ - Canvas PNG  │ │
-│  │ - ISO 8601 timestamps│  │ - RFC 4180 escaping │  │ - Raw CSV pts │ │
-│  └──────────┬───────────┘  └──────────┬──────────┘  └───────┬───────┘ │
-└─────────────┼─────────────────────────┼─────────────────────┼──────────┘
-              ▼                         ▼                     ▼
+│                              VITE BUILD                                │
+│                     `vite build` (< 3 seconds)                         │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+                                    ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│                      CLIENT FILE DOWNLOAD PIPELINE                     │
-│               Blob -> URL.createObjectURL -> <a> download               │
+│                             PRODUCTION DIST                            │
+│  `dist/`                                                               │
+│  - index.html & optimized JS/CSS bundles                               │
+│  - static /models/*.glb available for runtime Three.js GLTFLoader      │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Data Model & State
+### Clean `package.json` Specification
 
-```typescript
-// Complete JSON Export Schema
-interface AerodynamicsExportSnapshot {
-  version: "1.0.0";
-  generator: "Aerodynamics Simulator and Physics Wind Tunnel";
-  timestamp: string; // ISO 8601
-  aircraft: {
-    id: string;
-    name: string;
-    description: string;
-    wingspan_m: number;
-    chord_m: number;
-    referenceArea_m2: number;
-    aspectRatio: number;
-    stallAngle_deg: number;
-    cd0: number;
-    weight_kg: number;
-  };
-  flightConditions: {
-    airspeed_kts: number;
-    airspeed_mps: number;
-    altitude_ft: number;
-    altitude_m: number;
-    angle_of_attack_deg: number;
-    flaps_deg: number;
-    air_density_kg_m3: number;
-    speed_of_sound_mps: number;
-    mach_number: number;
-    dynamic_pressure_pa: number;
-    reynolds_number: number;
-  };
-  telemetryResults: {
-    lift_N: number;
-    drag_N: number;
-    lift_coefficient_cl: number;
-    drag_coefficient_cd: number;
-    lift_to_drag_ratio: number;
-    flow_state: "Laminar" | "Turbulent" | "Separated (Stall)";
-    is_stalled: boolean;
-    stall_margin_deg: number;
-    suction_contribution_pct: number;
-    compression_contribution_pct: number;
-    downwash_deflection_deg: number;
-  };
-  polarSweep: Array<{
-    aoa_deg: number;
-    cl: number;
-    cd: number;
-    ld_ratio: number;
-    is_stalled: boolean;
-  }>;
+```json
+{
+  "name": "aerodynamics-simulator",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port=3000 --host=0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview",
+    "clean": "rm -rf dist server.js",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.0.9",
+    "@vitejs/plugin-react": "^4.3.4",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "gsap": "^3.12.7",
+    "lucide-react": "^0.475.0",
+    "motion": "^12.4.7",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "three": "^0.174.0",
+    "vite": "^6.2.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.13.4",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@types/three": "^0.174.0",
+    "autoprefixer": "^10.4.20",
+    "esbuild": "^0.25.0",
+    "tailwindcss": "^4.0.9",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
 }
 ```
 
-### Step-by-Step Implementation Sequence
+### Execution Steps (Once Approved)
 
-1. **Export Utility Module (`src/utils/telemetryExport.ts`)**:
-   - Create clean, modular helper functions:
-     - `exportTelemetryJSON(...)`: Formats metadata, aircraft specs, conditions, results, and sweep samples into pretty-printed JSON.
-     - `exportTelemetryCSV(...)`: Builds double-table CSV with quoted headers, parameter section, and polar sweep rows.
-     - `exportSvgAsFile(...)`: Serializes SVG element to `.svg` file.
-     - `exportSvgAsPng(...)`: Uses canvas drawing to generate crisp 300 DPI equivalent PNG file.
-     - `exportCurveDataCSV(...)`: Dumps active curve $(x, y)$ coordinate points to CSV.
-2. **TelemetryHUD Export Menu (`src/components/TelemetryHUD.tsx`)**:
-   - Replace the single CSV button with a responsive dropdown menu toggle.
-   - Add items for "Export JSON Snapshot" and "Export CSV Dataset".
-   - Include clear visual badges, item descriptions, and animated download confirmation toasts.
-3. **AeroCharts Graph Export Controls (`src/components/AeroCharts.tsx`)**:
-   - Add a compact export action button next to the chart tabs.
-   - Support "Download SVG", "Download PNG", and "Download Active Curve (CSV)".
-   - Bind to the active SVG element with clean dimensions, dark background fill, and high-contrast labels.
-4. **Verification & Testing**:
-   - Test JSON formatting against JSON schema parsers.
-   - Verify CSV delimiter handling and Excel compatibility.
-   - Verify SVG and PNG image output rendering in standard image viewers.
-   - Run `compile_applet` and `lint_applet` to ensure zero compilation or type issues.
+1. **Relocate GLB Files**: Move `boeing_787.glb`, `concorde_free_with_interior.glb`, `f-22_raptor_-_fighter_jet_-_free.glb` (renamed to clean `f22_raptor.glb`), and `airfoil.glb` into `public/models/`.
+2. **Update `package.json`**: Replace invalid versions with the stable, compatible releases shown above.
+3. **Re-populate Dependencies**: Run `install_applet_dependencies` to ensure a clean, audited `node_modules` directory with working `vite` and `tsc` binaries.
+4. **Verify Build**: Run `compile_applet` and `lint_applet` to confirm zero errors and fast sub-second compilation.

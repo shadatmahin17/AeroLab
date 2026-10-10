@@ -331,7 +331,7 @@ export default function App() {
           `}
         >
           <div className="w-full h-full relative flex-1 min-h-0">
-            {params.renderEngine !== 'canvas' && params.modelType === 'f22' ? (
+            {params.renderEngine !== 'canvas' ? (
               <WindTunnelCanvasWebGL
                 params={params}
                 onParamChange={handleParamChange}
@@ -346,8 +346,8 @@ export default function App() {
                 onParamChange={handleParamChange}
                 telemetry={telemetry}
                 isPaused={isPaused}
-                onOpenWebGL={params.modelType === 'f22' ? () => handleParamChange('renderEngine', 'webgl') : undefined}
-                onOpenModelInspector={params.modelType === 'f22' ? () => setIsModelViewerOpen(true) : undefined}
+                onOpenWebGL={() => handleParamChange('renderEngine', 'webgl')}
+                onOpenModelInspector={() => setIsModelViewerOpen(true)}
               />
             )}
           </div>
@@ -494,7 +494,14 @@ export default function App() {
       <ModelViewerModal
         isOpen={isModelViewerOpen}
         onClose={() => setIsModelViewerOpen(false)}
-        onApplyToWindTunnel={(opts) => handleParamChange('landingGear', opts.landingGear)}
+        activeModelType={params.modelType}
+        onSelectModel={(modelType) => handleParamChange('modelType', modelType)}
+        onApplyToWindTunnel={(opts) => {
+          handleParamChange('modelType', opts.modelType);
+          if (opts.landingGear !== undefined) {
+            handleParamChange('landingGear', opts.landingGear);
+          }
+        }}
       />
     </div>
   );
