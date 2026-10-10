@@ -1,7 +1,20 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { AircraftModelType, AeroTelemetry } from '../types/aerodynamics';
 import { calculateAeroTelemetry, AIRCRAFT_MODELS } from '../utils/airfoilGenerators';
-import { TrendingUp } from 'lucide-react';
+import {
+  downloadSvgElement,
+  downloadSvgAsPng,
+  downloadCurveDataCSV,
+} from '../utils/telemetryExport';
+import { 
+  TrendingUp, 
+  Download, 
+  ChevronDown, 
+  Image, 
+  FileCode2, 
+  FileSpreadsheet, 
+  CheckCircle2 
+} from 'lucide-react';
 
 interface AeroChartsProps {
   modelType: AircraftModelType;
@@ -21,6 +34,24 @@ export const AeroCharts: React.FC<AeroChartsProps> = ({
   telemetry,
 }) => {
   const [activeTab, setActiveTab] = useState<'lift' | 'dragPolar' | 'pressure'>('lift');
+  const [showChartExportMenu, setShowChartExportMenu] = useState(false);
+  const [chartSuccessMsg, setChartSuccessMsg] = useState<string | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const chartMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (chartMenuRef.current && !chartMenuRef.current.contains(event.target as Node)) {
+        setShowChartExportMenu(false);
+      }
+    };
+    if (showChartExportMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showChartExportMenu]);
 
   // Generate data points for polar curves
   const aoaRange: { aoa: number; cl: number; cd: number; isStalled: boolean }[] = [];
@@ -60,7 +91,7 @@ export const AeroCharts: React.FC<AeroChartsProps> = ({
     const zeroAoaX = scaleX(0);
 
     return (
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full">
+      <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} className="w-full h-full">
         {/* Zero axes */}
         <line x1={pad.left} y1={zeroLiftY} x2={width - pad.right} y2={zeroLiftY} stroke="#334155" strokeWidth="1" strokeDasharray="3 3" />
         <line x1={zeroAoaX} y1={pad.top} x2={zeroAoaX} y2={height - pad.bottom} stroke="#334155" strokeWidth="1" strokeDasharray="3 3" />
@@ -144,7 +175,7 @@ export const AeroCharts: React.FC<AeroChartsProps> = ({
     const currY = scaleY(telemetry.cl);
 
     return (
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full">
+      <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} className="w-full h-full">
         {/* Grids */}
         <line x1={pad.left} y1={scaleY(0)} x2={width - pad.right} y2={scaleY(0)} stroke="#334155" strokeWidth="1" strokeDasharray="3 3" />
 
@@ -231,7 +262,7 @@ export const AeroCharts: React.FC<AeroChartsProps> = ({
     }, '');
 
     return (
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full">
+      <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} className="w-full h-full">
         {/* Zero Cp axis */}
         <line x1={pad.left} y1={scaleY(0)} x2={width - pad.right} y2={scaleY(0)} stroke="#334155" strokeWidth="1" strokeDasharray="3 3" />
 
@@ -274,50 +305,191 @@ export const AeroCharts: React.FC<AeroChartsProps> = ({
     );
   };
 
+  const getBaseName = () => {
+    const tabSuffix = activeTab === 'lift' ? 'lift_curve_cl_alpha' : activeTab === 'dragPolar' ? 'drag_polar_cl_cd' : 'pressure_dist_cp';
+    return `aerolab_${modelType}_${tabSuffix}_aoa${currentAoa >= 0 ? '+' : ''}${currentAoa.toFixed(1)}deg`;
+  };
+
+  const handleExportSvg = () => {
+    if (!svgRef.current) return;
+    downloadSvgElement(svgRef.current, getBaseName());
+    setChartSuccessMsg('SVG Saved');
+    setShowChartExportMenu(false);
+    setTimeout(() => setChartSuccessMsg(null), 3000);
+  };
+
+  const handleExportPng = async () => {
+    if (!svgRef.current) return;
+    try {
+      await downloadSvgAsPng(svgRef.current, getBaseName(), 2);
+      setChartSuccessMsg('PNG Saved');
+    } catch (e) {
+      console.error(e);
+      setChartSuccessMsg('Export Error');
+    }
+    setShowChartExportMenu(false);
+    setTimeout(() => setChartSuccessMsg(null), 3000);
+  };
+
+  const handleExportCurveCsv = () => {
+    const baseName = getBaseName();
+    if (activeTab === 'lift') {
+      const points = aoaRange.map((pt) => ({
+        x: pt.aoa,
+        y: pt.cl,
+        label: pt.isStalled ? 'Stalled' : 'Attached',
+      }));
+      downloadCurveDataCSV(points, 'Angle of Attack (deg)', 'Lift Coefficient (CL)', baseName);
+    } else if (activeTab === 'dragPolar') {
+      const points = aoaRange.map((pt) => ({
+        x: pt.cd,
+        y: pt.cl,
+        label: `AoA=${pt.aoa.toFixed(1)}deg`,
+      }));
+      downloadCurveDataCSV(points, 'Drag Coefficient (CD)', 'Lift Coefficient (CL)', baseName);
+    } else {
+      // Pressure distribution
+      const points: Array<{ x: number; y: number; label: string }> = [];
+      const effectiveCl = Math.max(0.1, telemetry.cl);
+      for (let i = 0; i <= 30; i++) {
+        const xc = i / 30;
+        const cpUpper = -effectiveCl * 1.8 * (Math.pow(1 - xc, 0.45) / Math.sqrt(Math.max(0.04, xc))) + 0.15;
+        const cpLower = effectiveCl * 0.7 * Math.pow(1 - xc, 0.75);
+        points.push({ x: xc, y: Math.max(-3.5, Math.min(1.0, cpUpper)), label: 'Upper Suction (-Cp)' });
+        points.push({ x: xc, y: Math.max(-0.5, Math.min(1.0, cpLower)), label: 'Lower Compression (+Cp)' });
+      }
+      downloadCurveDataCSV(points, 'Chord Position (x/c)', 'Pressure Coefficient (Cp)', baseName);
+    }
+    setChartSuccessMsg('Data Saved');
+    setShowChartExportMenu(false);
+    setTimeout(() => setChartSuccessMsg(null), 3000);
+  };
+
   return (
-    <div className="w-full p-5 rounded-2xl antigravity-glass flex flex-col">
+    <div className="w-full p-3.5 rounded-xl antigravity-glass flex flex-col gap-2.5">
       {/* Chart Header & Tabs */}
-      <div className="flex flex-wrap items-center justify-between gap-2.5 mb-3.5">
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-xl bg-cyan-950/70 border border-cyan-500/40 flex items-center justify-center text-cyan-400">
-            <TrendingUp className="w-4 h-4" />
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-1.5">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <div className="w-5 h-5 rounded-md bg-cyan-950/70 border border-cyan-500/40 flex items-center justify-center text-cyan-400 shrink-0">
+              <TrendingUp className="w-3 h-3" />
+            </div>
+            <span className="text-xs font-bold text-slate-100 tracking-wide uppercase font-sans truncate">
+              Aerodynamic Polars
+            </span>
+            {chartSuccessMsg && (
+              <span className="ml-1 px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/60 text-emerald-300 text-[9px] font-mono flex items-center gap-1 shrink-0 animate-in fade-in duration-150">
+                <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
+                <span>{chartSuccessMsg}</span>
+              </span>
+            )}
           </div>
-          <span className="text-xs font-bold text-slate-100 tracking-wide uppercase font-sans">
-            Aerodynamic Polar Curves
-          </span>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="text-[10px] text-cyan-300 font-mono hidden sm:inline">
+              α: {currentAoa >= 0 ? '+' : ''}{currentAoa.toFixed(1)}°
+            </span>
+
+            {/* Export Chart Dropdown Menu */}
+            <div className="relative" ref={chartMenuRef}>
+              <button
+                onClick={() => setShowChartExportMenu((prev) => !prev)}
+                className="px-2 py-0.5 rounded-md bg-slate-900 border border-slate-700/80 hover:bg-slate-800 text-[10px] font-semibold text-slate-200 flex items-center gap-1 transition-colors shadow-sm cursor-pointer"
+                title="Export graph as high-res PNG, vector SVG, or raw CSV points"
+                aria-expanded={showChartExportMenu}
+                aria-haspopup="true"
+              >
+                <Download className="w-2.5 h-2.5 text-cyan-400" />
+                <span>Export Graph</span>
+                <ChevronDown className={`w-2.5 h-2.5 text-slate-400 transition-transform duration-200 ${showChartExportMenu ? 'rotate-180' : ''}`} />
+              </button>
+
+              {showChartExportMenu && (
+                <div className="absolute right-0 top-full mt-1 w-52 rounded-xl bg-[#090d19]/95 border border-slate-700/90 shadow-2xl backdrop-blur-xl p-1.5 z-50 flex flex-col gap-1 animate-in fade-in slide-in-from-top-1 duration-150">
+                  <div className="px-2 py-1 border-b border-slate-800/80">
+                    <span className="text-[9px] font-mono uppercase tracking-wider text-slate-400">
+                      Export Active Graph
+                    </span>
+                  </div>
+
+                  <button
+                    onClick={handleExportPng}
+                    className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-800/90 flex items-center gap-2 text-slate-200 group transition-colors cursor-pointer"
+                  >
+                    <Image className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                    <div className="flex flex-col">
+                      <span className="text-[11px] font-semibold text-slate-100 flex items-center gap-1">
+                        High-Res Image
+                        <span className="text-[9px] font-mono px-1 rounded bg-sky-500/20 text-sky-300">.png</span>
+                      </span>
+                      <span className="text-[9px] text-slate-400">Crisp 2× raster render</span>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={handleExportSvg}
+                    className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-800/90 flex items-center gap-2 text-slate-200 group transition-colors cursor-pointer"
+                  >
+                    <FileCode2 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <div className="flex flex-col">
+                      <span className="text-[11px] font-semibold text-slate-100 flex items-center gap-1">
+                        Vector Graphic
+                        <span className="text-[9px] font-mono px-1 rounded bg-amber-500/20 text-amber-300">.svg</span>
+                      </span>
+                      <span className="text-[9px] text-slate-400">Lossless scalable vector</span>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={handleExportCurveCsv}
+                    className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-800/90 flex items-center gap-2 text-slate-200 group transition-colors cursor-pointer"
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    <div className="flex flex-col">
+                      <span className="text-[11px] font-semibold text-slate-100 flex items-center gap-1">
+                        Curve Points
+                        <span className="text-[9px] font-mono px-1 rounded bg-emerald-500/20 text-emerald-300">.csv</span>
+                      </span>
+                      <span className="text-[9px] text-slate-400">Raw (x, y) plot coordinates</span>
+                    </div>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Functional Tabs */}
-        <div className="flex items-center gap-1 p-1 rounded-xl bg-slate-950/80 border border-cyan-500/30">
+        <div className="grid grid-cols-3 gap-1 p-1 rounded-lg bg-slate-950/80 border border-cyan-500/30">
           <button
             onClick={() => setActiveTab('lift')}
-            className={`px-3 py-1 text-xs font-semibold rounded-lg transition-all ${
+            className={`py-1 text-[11px] font-semibold rounded-md text-center transition-all cursor-pointer ${
               activeTab === 'lift'
                 ? 'bg-gradient-to-r from-cyan-500 to-sky-400 text-slate-950 font-bold shadow-[0_0_12px_rgba(56,189,248,0.4)]'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            Lift Curve (CL-α)
+            Lift (CL-α)
           </button>
           <button
             onClick={() => setActiveTab('dragPolar')}
-            className={`px-3 py-1 text-xs font-semibold rounded-lg transition-all ${
+            className={`py-1 text-[11px] font-semibold rounded-md text-center transition-all cursor-pointer ${
               activeTab === 'dragPolar'
                 ? 'bg-gradient-to-r from-amber-500 to-yellow-400 text-slate-950 font-bold shadow-[0_0_12px_rgba(245,158,11,0.4)]'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            Drag Polar (CL-CD)
+            Drag (CL-CD)
           </button>
           <button
             onClick={() => setActiveTab('pressure')}
-            className={`px-3 py-1 text-xs font-semibold rounded-lg transition-all ${
+            className={`py-1 text-[11px] font-semibold rounded-md text-center transition-all cursor-pointer ${
               activeTab === 'pressure'
                 ? 'bg-gradient-to-r from-indigo-500 to-cyan-500 text-white font-bold shadow-[0_0_12px_rgba(99,102,241,0.4)]'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            Pressure (Cp-x/c)
+            Cp Dist
           </button>
         </div>
       </div>

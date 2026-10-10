@@ -5,6 +5,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { SimulationParams, AeroTelemetry } from '../types/aerodynamics';
 import { AIRCRAFT_MODELS } from '../utils/airfoilGenerators';
 import { getAircraft3DModel } from '../utils/aircraft3DGeometry';
+import { FluidDynamics3D, Fluid3DParams } from '../engine/FluidDynamics3D';
 import { windTunnelAudio } from '../utils/audio';
 import { 
   RotateCw, 
@@ -346,38 +347,54 @@ export const WindTunnelCanvasWebGL: React.FC<WindTunnelCanvasWebGLProps> = ({
         controlsRef.current.autoRotate = false;
       }
 
-      // Update Flow Particles
+      // Update Flow Particles using 3D Fluid Dynamics
       if (particlePositionsRef.current && particlesPointsRef.current) {
         const pos = particlePositionsRef.current;
-        const vel = particleVelocitiesRef.current!;
-        const origY = particleOriginalYRef.current!;
-        const speedMult = (params.airspeed_kts / 350) * 1.5;
+        const colorAttr = particlesPointsRef.current.geometry.attributes.color as THREE.BufferAttribute;
+        const fluid3DParams: Fluid3DParams = {
+          modelType: 'f22',
+          aoaDeg: params.angle_of_attack,
+          airspeed_kts: params.airspeed_kts,
+          mach: telemetry.mach,
+          altitude_ft: params.altitude_ft,
+          flapsDeg: params.flaps_deg,
+          isStalled: telemetry.isStalled,
+          cl: telemetry.cl,
+          cd: telemetry.cd,
+          timeSec: now * 0.001,
+        };
 
         for (let i = 0; i < particleCount; i++) {
-          if (!isPaused) {
-            pos[i * 3] += vel[i] * speedMult * 0.4;
-          }
-
-          // Flow deflection around jet body
           const px = pos[i * 3];
-          if (px > -7 && px < 7) {
-            // Deflect above/below body
-            if (origY[i] > 0) {
-              pos[i * 3 + 1] = origY[i] + 0.35 * Math.sin(((px + 7) / 14) * Math.PI);
+          const py = pos[i * 3 + 1];
+          const pz = pos[i * 3 + 2];
+
+          if (!isPaused) {
+            const vel3D = FluidDynamics3D.getVelocity({ x: px, y: py, z: pz }, fluid3DParams);
+            pos[i * 3] += vel3D.u * 0.38;
+            pos[i * 3 + 1] += vel3D.v * 0.38;
+            pos[i * 3 + 2] += vel3D.w * 0.38;
+
+            if (colorAttr) {
+              if (vel3D.isSeparated || (telemetry.isStalled && px > -1.0)) {
+                colorAttr.setXYZ(i, 0.94, 0.27, 0.27); // red
+              } else if (vel3D.pressureCoeff < -0.7) {
+                colorAttr.setXYZ(i, 0.0, 0.94, 1.0); // electric cyan
+              } else if (vel3D.pressureCoeff > 0.3) {
+                colorAttr.setXYZ(i, 0.98, 0.75, 0.14); // amber
+              }
             }
-          } else {
-            pos[i * 3 + 1] = origY[i];
           }
 
-          // Reset particle if exited downstream chamber
-          if (pos[i * 3] > 20) {
+          // Reset particle if exited downstream chamber or tunnel bounds
+          if (pos[i * 3] > 20 || Math.abs(pos[i * 3 + 1]) > 8 || Math.abs(pos[i * 3 + 2]) > 13) {
             pos[i * 3] = -20;
             pos[i * 3 + 1] = -4 + Math.random() * 8;
-            origY[i] = pos[i * 3 + 1];
-            pos[i * 3 + 2] = -7 + Math.random() * 14;
+            pos[i * 3 + 2] = -6 + Math.random() * 12;
           }
         }
         particlesPointsRef.current.geometry.attributes.position.needsUpdate = true;
+        if (colorAttr) colorAttr.needsUpdate = true;
       }
 
       // Update Shockwave Cone Pulsing
@@ -402,13 +419,18 @@ export const WindTunnelCanvasWebGL: React.FC<WindTunnelCanvasWebGLProps> = ({
       if (!mount || !renderer || !camera) return;
       const w = mount.clientWidth;
       const h = mount.clientHeight;
+      if (w === 0 || h === 0) return;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
     };
+    handleResize();
+    const resizeObserver = new ResizeObserver(handleResize);
+    resizeObserver.observe(mount);
     window.addEventListener('resize', handleResize);
 
     return () => {
+      resizeObserver.disconnect();
       window.removeEventListener('resize', handleResize);
       if (animFrameIdRef.current) cancelAnimationFrame(animFrameIdRef.current);
       renderer.dispose();
@@ -543,7 +565,7 @@ export const WindTunnelCanvasWebGL: React.FC<WindTunnelCanvasWebGLProps> = ({
     }
   }, [telemetry.lift_N, telemetry.drag_N, telemetry.isStalled, params.show_pressure_vectors]);
 
-  // Update Dynamic Smoke Streamlines
+  // Update Dynamic Smoke Streamlines (Fluid Dynamics Rake)
   useEffect(() => {
     if (!streamlinesGroupRef.current) return;
     streamlinesGroupRef.current.clear();
@@ -551,41 +573,47 @@ export const WindTunnelCanvasWebGL: React.FC<WindTunnelCanvasWebGLProps> = ({
     if (!params.show_streamlines) return;
 
     const linesGroup = streamlinesGroupRef.current;
-    const spanOffsets = [-4.5, -3.0, -1.5, 0, 1.5, 3.0, 4.5];
-    const downwashAngle = (2 * telemetry.cl) / (Math.PI * 7.5); // rad
-    const downwashDrop = Math.tan(downwashAngle) * 12;
+    const spanOffsets = [-5.2, -3.6, -2.0, -0.6, 0.6, 2.0, 3.6, 5.2];
+    const rakeHeights = [-1.4, 0.3, 1.5];
+
+    const fluid3DParams: Fluid3DParams = {
+      modelType: 'f22',
+      aoaDeg: params.angle_of_attack,
+      airspeed_kts: params.airspeed_kts,
+      mach: telemetry.mach,
+      altitude_ft: params.altitude_ft,
+      flapsDeg: params.flaps_deg,
+      isStalled: telemetry.isStalled,
+      cl: telemetry.cl,
+      cd: telemetry.cd,
+      timeSec: Date.now() * 0.001,
+    };
 
     spanOffsets.forEach((z) => {
-      const points: THREE.Vector3[] = [];
-      const numPts = 30;
+      rakeHeights.forEach((y) => {
+        const startPt = { x: -18, y, z };
+        const pts3D = FluidDynamics3D.traceStreamline(startPt, fluid3DParams, 36, 1.0);
 
-      for (let i = 0; i <= numPts; i++) {
-        const x = -18 + (i / numPts) * 36;
-        let y = 0.5;
+        if (pts3D.length > 3) {
+          const points = pts3D.map((p) => new THREE.Vector3(p.x, p.y, p.z));
+          const curve = new THREE.CatmullRomCurve3(points);
+          const tubeGeo = new THREE.TubeGeometry(curve, 32, 0.045, 6, false);
 
-        // Flow curvature over wing
-        if (x >= -6 && x <= 4) {
-          const frac = (x + 6) / 10;
-          y += Math.sin(frac * Math.PI) * 1.1 * Math.max(0.2, telemetry.cl);
-        } else if (x > 4) {
-          // Downwash trajectory
-          const aftFrac = (x - 4) / 14;
-          y -= aftFrac * downwashDrop;
+          const isSeparatedFilament = pts3D.some((p) => p.isSeparated);
+          const tubeColor = isSeparatedFilament || (telemetry.isStalled && y > 0.0)
+            ? 0xef4444
+            : (y > 0.5 ? 0x00f0ff : 0x10b981);
+
+          const tubeMat = new THREE.MeshBasicMaterial({
+            color: tubeColor,
+            transparent: true,
+            opacity: 0.68,
+          });
+          linesGroup.add(new THREE.Mesh(tubeGeo, tubeMat));
         }
-
-        points.push(new THREE.Vector3(x, y, z));
-      }
-
-      const curve = new THREE.CatmullRomCurve3(points);
-      const tubeGeo = new THREE.TubeGeometry(curve, 32, 0.05, 8, false);
-      const tubeMat = new THREE.MeshBasicMaterial({
-        color: telemetry.isStalled ? 0xef4444 : 0x00f0ff,
-        transparent: true,
-        opacity: 0.65,
       });
-      linesGroup.add(new THREE.Mesh(tubeGeo, tubeMat));
     });
-  }, [params.show_streamlines, telemetry.cl, telemetry.isStalled]);
+  }, [params.show_streamlines, params.angle_of_attack, params.airspeed_kts, telemetry.cl, telemetry.isStalled]);
 
   // Camera Presets
   const setCameraPreset = (preset: 'iso' | 'side' | 'top' | 'front' | 'chase') => {
@@ -618,7 +646,7 @@ export const WindTunnelCanvasWebGL: React.FC<WindTunnelCanvasWebGLProps> = ({
   };
 
   return (
-    <div className="relative w-full aspect-[4/3] sm:aspect-[16/10] md:aspect-[16/9] lg:aspect-[21/9] max-h-[640px] rounded-3xl overflow-hidden border border-cyan-500/30 bg-[#060a12] shadow-[0_0_50px_rgba(6,182,212,0.15)] flex flex-col group select-none">
+    <div className="relative w-full h-full min-h-[420px] rounded-2xl overflow-hidden border border-cyan-500/30 bg-[#060a12] shadow-[0_0_50px_rgba(6,182,212,0.15)] flex flex-col group select-none">
       
       {/* Three.js Canvas Container */}
       <div ref={mountRef} className="w-full h-full cursor-grab active:cursor-grabbing" />
@@ -690,9 +718,9 @@ export const WindTunnelCanvasWebGL: React.FC<WindTunnelCanvasWebGLProps> = ({
               <button
                 onClick={onFallbackToCanvas}
                 className="px-2.5 py-1 text-[11px] font-semibold text-slate-400 hover:text-cyan-200 transition-colors border-l border-white/10 ml-1"
-                title="Switch to 2D Canvas Engine"
+                title="Switch to Canvas 3D Engine"
               >
-                2D Engine
+                Canvas 3D
               </button>
             )}
           </div>

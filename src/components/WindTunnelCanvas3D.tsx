@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { SimulationParams, AeroTelemetry } from '../types/aerodynamics';
 import { AIRCRAFT_MODELS } from '../utils/airfoilGenerators';
 import { getAircraft3DModel, computeFaceNormal, Vertex3D } from '../utils/aircraft3DGeometry';
+import { FluidDynamics3D, Fluid3DParams } from '../engine/FluidDynamics3D';
 import { windTunnelAudio } from '../utils/audio';
 import { 
   RotateCw, 
@@ -22,7 +23,6 @@ interface WindTunnelCanvas3DProps {
   onParamChange: <K extends keyof SimulationParams>(key: K, value: SimulationParams[K]) => void;
   telemetry: AeroTelemetry;
   isPaused: boolean;
-  onFallbackTo2D?: () => void;
   onOpenWebGL?: () => void;
   onOpenModelInspector?: () => void;
 }
@@ -282,29 +282,44 @@ export const WindTunnelCanvas3D: React.FC<WindTunnelCanvas3DProps> = ({
     }
 
     // 4. Update and Render Dynamic 3D Flow Particles (PIV Velocity Streaks)
+    const fluid3DParams: Fluid3DParams = {
+      modelType: params.modelType,
+      aoaDeg: params.angle_of_attack,
+      airspeed_kts: params.airspeed_kts,
+      mach: telemetry.mach,
+      altitude_ft: params.altitude_ft,
+      flapsDeg: params.flaps_deg,
+      isStalled: telemetry.isStalled,
+      cl: telemetry.cl,
+      cd: telemetry.cd,
+      timeSec: now * 0.001,
+    };
+
     if (params.show_particles && !isPaused) {
-      const pSpeed = Math.max(0.25, (params.airspeed_kts / 380) * 0.58);
       const pList = particlesRef.current;
+      const dtStep = 0.58;
 
       for (let i = 0; i < pList.length; i++) {
         const p = pList[i];
 
-        // Bernoulli local acceleration: Air speeds up dynamically over wing suction crest
-        let localSpeedMult = 1.0;
-        if (p.x > -4 && p.x < 3 && Math.abs(p.z) < 5.5) {
-          if (p.y > 0) {
-            // Suction crest acceleration
-            localSpeedMult = 1.0 + Math.max(0, telemetry.cl) * 0.42;
-          } else {
-            // Compression slowdown
-            localSpeedMult = Math.max(0.6, 1.0 - Math.max(0, telemetry.cl) * 0.22);
-          }
-        }
+        // Evaluate local 3D fluid dynamics velocity vector
+        const vel3D = FluidDynamics3D.getVelocity(p, fluid3DParams);
 
-        p.x += p.vx * pSpeed * localSpeedMult * 2.2;
+        // Previous position for velocity streak drawing
+        const prevPos = { x: p.x, y: p.y, z: p.z };
+
+        // 3D displacement
+        p.vx = vel3D.u;
+        p.vy = vel3D.v;
+        p.vz = vel3D.w;
+
+        p.x += p.vx * dtStep;
+        p.y += p.vy * dtStep;
+        p.z += p.vz * dtStep;
         p.age += 1;
 
-        if (p.x > 18 || p.age > p.maxAge) {
+        // Recycle particles exiting boundaries
+        if (p.x > 18 || Math.abs(p.y) > 8 || Math.abs(p.z) > 13 || p.age > p.maxAge) {
           p.x = -18;
           p.y = -4 + Math.random() * 8;
           p.z = -6 + Math.random() * 12;
@@ -312,19 +327,37 @@ export const WindTunnelCanvas3D: React.FC<WindTunnelCanvas3DProps> = ({
         }
 
         const head = project3Dto2D(p, camX, camY, camZ, viewMatrix, focalLength, cx, cy);
-        const streakLen = p.vx * localSpeedMult * 1.6;
-        const tailPos = { x: p.x - streakLen, y: p.y, z: p.z };
-        const tail = project3Dto2D(tailPos, camX, camY, camZ, viewMatrix, focalLength, cx, cy);
+        const tail = project3Dto2D(prevPos, camX, camY, camZ, viewMatrix, focalLength, cx, cy);
 
         if (head && tail) {
           const alpha = Math.min(0.92, 1 - p.age / p.maxAge);
-          ctx.strokeStyle = telemetry.isStalled && p.x > 0 ? '#ef4444' : p.color;
+
+          // Fluid dynamics color-coding:
+          // Separated stall wake = #ef4444
+          // Suction peak = #00f0ff
+          // Compression = #fbbf24
+          let strokeCol = p.color;
+          if (vel3D.isSeparated || (telemetry.isStalled && p.x > -1.0)) {
+            strokeCol = '#ef4444';
+          } else if (vel3D.pressureCoeff < -0.6) {
+            strokeCol = '#00f0ff';
+          } else if (vel3D.pressureCoeff > 0.25) {
+            strokeCol = '#fbbf24';
+          }
+
+          ctx.strokeStyle = strokeCol;
           ctx.globalAlpha = alpha;
-          ctx.lineWidth = Math.max(1.0, 24 / head.depth);
+          ctx.lineWidth = Math.max(1.0, 22 / head.depth);
           ctx.beginPath();
           ctx.moveTo(tail.x, tail.y);
           ctx.lineTo(head.x, head.y);
           ctx.stroke();
+
+          // Tracer head bead
+          ctx.fillStyle = strokeCol;
+          ctx.beginPath();
+          ctx.arc(head.x, head.y, Math.max(1.2, 18 / head.depth), 0, Math.PI * 2);
+          ctx.fill();
         }
       }
       ctx.globalAlpha = 1.0;
@@ -534,62 +567,62 @@ export const WindTunnelCanvas3D: React.FC<WindTunnelCanvas3DProps> = ({
       ctx.restore();
     }
 
-    // 8. Render Dynamic High-Density 3D Smoke Streamlines (Vibrant Velocity Gradient)
+    // 8. Render Dynamic High-Density 3D Smoke Streamlines (Fluid Dynamics Rake)
     if (params.show_streamlines) {
-      const rakeZ = [-5.2, -3.8, -2.4, -1.2, -0.4, 0.4, 1.2, 2.4, 3.8, 5.2];
-      const rakeY = [-1.6, -0.7, 0.0, 0.7, 1.6];
-      const downwash = Math.sin(pitchRad) * 2.3;
+      const rakeZ = [-5.5, -3.8, -2.2, -0.8, 0.8, 2.2, 3.8, 5.5];
+      const rakeY = [-1.8, -0.6, 0.4, 1.4, 2.3];
 
       ctx.save();
-      ctx.lineWidth = 1.8;
+      ctx.lineWidth = Math.max(1.2, 1.6 * params.smoke_density);
 
-      for (const z of rakeZ) {
-        for (const y of rakeY) {
-          ctx.beginPath();
-          let started = false;
-          const steps = 34;
+      for (let rkIdx = 0; rkIdx < rakeZ.length; rkIdx++) {
+        const z = rakeZ[rkIdx];
+        for (let ryIdx = 0; ryIdx < rakeY.length; ryIdx++) {
+          const y = rakeY[ryIdx];
+          const startPt = { x: -16, y, z };
+          const pts = FluidDynamics3D.traceStreamline(startPt, fluid3DParams, 36, 0.95);
 
-          for (let i = 0; i <= steps; i++) {
-            const t = i / steps;
-            const px = -16 + t * 32;
-            let py = y;
-            let pz = z;
+          if (pts.length > 2) {
+            ctx.beginPath();
+            let started = false;
 
-            // Flow deflection around 3D body
-            if (px > -4.5 && px < 4.5) {
-              const r = Math.hypot(px * 0.7, py * 1.5, pz * 0.5);
-              if (r < 3.2) {
-                py += (y >= 0 ? 0.75 : -0.75) * (1 - Math.abs(px) / 4.5);
+            for (let i = 0; i < pts.length; i++) {
+              const p2d = project3Dto2D(pts[i], camX, camY, camZ, viewMatrix, focalLength, cx, cy);
+              if (p2d) {
+                if (!started) {
+                  ctx.moveTo(p2d.x, p2d.y);
+                  started = true;
+                } else {
+                  ctx.lineTo(p2d.x, p2d.y);
+                }
               }
             }
 
-            // Downwash behind trailing edge
-            if (px >= 2.0) {
-              py -= downwash * (px - 2.0) * 0.085;
-              if (telemetry.isStalled && y > -0.2) {
-                // Turbulent 3D wake detachment in stall
-                py += Math.sin(px * 1.6 + now * 0.006) * 0.42;
-                pz += Math.cos(px * 1.6 + now * 0.006) * 0.36;
-              }
+            // Streamline color based on local fluid dynamics & stall
+            const isSeparatedFilament = pts.some((pt) => pt.isSeparated);
+            if (isSeparatedFilament || (telemetry.isStalled && y > -0.2)) {
+              ctx.strokeStyle = 'rgba(239, 68, 68, 0.75)';
+            } else if (y >= 0.4) {
+              ctx.strokeStyle = 'rgba(56, 189, 248, 0.72)'; // Upper suction sky cyan
+            } else {
+              ctx.strokeStyle = 'rgba(52, 211, 153, 0.62)'; // Lower compression emerald
             }
+            ctx.stroke();
 
-            const p = project3Dto2D({ x: px, y: py, z: pz }, camX, camY, camZ, viewMatrix, focalLength, cx, cy);
-            if (p) {
-              if (!started) {
-                ctx.moveTo(p.x, p.y);
-                started = true;
-              } else {
-                ctx.lineTo(p.x, p.y);
+            // Animated travelling smoke pulse node along each streamline
+            const pulsePhase = ((now * 0.06 * (params.airspeed_kts / 300) + rkIdx * 8 + ryIdx * 15) % 100) / 100;
+            const nodeIdx = Math.floor(pulsePhase * (pts.length - 1));
+            const nodePt = pts[nodeIdx];
+            if (nodePt) {
+              const node2d = project3Dto2D(nodePt, camX, camY, camZ, viewMatrix, focalLength, cx, cy);
+              if (node2d) {
+                ctx.fillStyle = isSeparatedFilament ? '#ef4444' : '#00f0ff';
+                ctx.beginPath();
+                ctx.arc(node2d.x, node2d.y, Math.max(1.2, 16 / node2d.depth), 0, Math.PI * 2);
+                ctx.fill();
               }
             }
           }
-
-          // Dynamic velocity color gradient:
-          // Cyan for high-speed laminar, Amber for lower surface, Red in stall wake
-          ctx.strokeStyle = telemetry.isStalled
-            ? (y > 0 ? 'rgba(239, 68, 68, 0.8)' : 'rgba(245, 158, 11, 0.6)')
-            : (y > 0 ? 'rgba(56, 189, 248, 0.75)' : 'rgba(52, 211, 153, 0.65)');
-          ctx.stroke();
         }
       }
       ctx.restore();
@@ -831,9 +864,10 @@ export const WindTunnelCanvas3D: React.FC<WindTunnelCanvas3DProps> = ({
 
   // Handle Resize
   useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
     const handleResize = () => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       if (canvas.width !== rect.width * dpr || canvas.height !== rect.height * dpr) {
@@ -843,8 +877,13 @@ export const WindTunnelCanvas3D: React.FC<WindTunnelCanvas3DProps> = ({
     };
 
     handleResize();
+    const resizeObserver = new ResizeObserver(handleResize);
+    resizeObserver.observe(canvas);
     window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', handleResize);
+    };
   }, []);
 
   // Mouse & Touch 3D Camera Orbit Controls & Shift-Drag AoA Pitching
@@ -891,7 +930,7 @@ export const WindTunnelCanvas3D: React.FC<WindTunnelCanvas3DProps> = ({
   };
 
   return (
-    <div className="relative w-full h-[420px] sm:h-[480px] lg:h-[540px] rounded-xl overflow-hidden border border-slate-800 bg-[#060a12] select-none shadow-2xl">
+    <div className="relative w-full h-full min-h-[460px] rounded-2xl overflow-hidden border border-slate-800 bg-[#060a12] select-none shadow-2xl">
       {/* Real 3D Canvas */}
       <canvas
         ref={canvasRef}

@@ -1,4 +1,4 @@
-# AeroLab — Interactive 3D Wind Tunnel & Aerodynamics Simulator
+# AeroLab — Aerodynamics Simulator and Physics Wind Tunnel
 
 **AeroLab** is an interactive fluid dynamics and aerospace physics simulation platform. It allows engineers, aviation students, and flight enthusiasts to test real 3D aircraft models and airfoils inside a virtual wind tunnel, analyzing aerodynamic lift, drag, pressure distributions, flow separation, and supersonic shockwaves in real time.
 
@@ -7,16 +7,16 @@
 ## Key Features
 
 ### 1. Interactive 3D Aircraft Models
-- **F-22 Raptor (Air Dominance Fighter)**: Blended chined fuselage, diamond delta wings with leading-edge extensions (LEX), twin canted vertical fins, stabilators, and supersonic afterburners.
+- **F-22 Raptor (Air Dominance Fighter)**: Blended chined fuselage, diamond delta wings with leading-edge extensions (LEX), twin canted vertical fins, stabilators, and supersonic afterburners. Includes full 3D GLB turntable inspection with real CAD metrics.
 - **Boeing 787 Dreamliner (Commercial Transport)**: Streamlined widebody fuselage, supercritical high-lift cambered wings with raked wingtips, underslung twin turbofans, and **deployable trailing-edge Fowler flaps** (0° to 40°).
 - **Concorde (Supersonic Cruiser)**: Slender ogival delta wing deck, droop nose, Olympus 593 engine boxes, and Mach 2+ shockwave propagation.
 - **NACA 2412 (Cambered Wing)**: Standard general aviation wing section (Cessna 172) with 2% camber, generating positive lift at 0° Angle of Attack.
 - **NACA 0012 (Symmetric Wing)**: Aerobatic and rotorcraft airfoil with zero camber.
 - **Circular Cylinder (Bluff Body)**: Classical benchmark for symmetric boundary layer detachment and von Kármán vortex shedding.
 
-### 2. Dual Wind Tunnel Simulation Engines
-- **3D Spatial Wind Tunnel Engine (Blender CAD Quality)**: Hardware-agnostic 3D projection engine with full 360° orbit, cinematic flyaround mode, zoom, dynamic pitch/AoA control with taileron trim, 3D multi-ribbon smoke streamlines with downwash deflection, counter-rotating **3D Wingtip Helical Vortices** (induced drag wake visualization), 850+ PIV velocity streak particle tracers, supersonic Mach cones ($\mu = \arcsin(1/M)$), and transonic Prandtl-Glauert condensation clouds.
-- **2D Navier-Stokes Grid Solver**: Grid-based fluid solver (Jos Stam algorithm) computing velocity advection, viscous diffusion, mass conservation projection ($\nabla \cdot \vec{u} = 0$), and circulation downwash according to the Kutta-Joukowski theorem.
+### 2. Pure 3D Fluid Dynamics Simulation
+- **Spatial 3D Wind Tunnel Engine**: Hardware-agnostic 3D projection engine with full 360° orbit, cinematic flyaround mode, zoom, dynamic pitch/AoA control with taileron trim, 3D multi-ribbon smoke streamlines with downwash deflection, counter-rotating **3D Wingtip Helical Vortices** (induced drag wake visualization), 850+ PIV velocity streak particle tracers, supersonic Mach cones ($\mu = \arcsin(1/M)$), and transonic Prandtl-Glauert condensation clouds.
+- **3D Aerodynamic Fluid Dynamics (`FluidDynamics3D.ts`)**: Models potential flow boundary displacement, Kutta circulation, downwash field, Lamb-Oseen wingtip vortex spirals, Bernoulli suction acceleration, and boundary layer separation in stall.
 - **Vibrant Aerodynamic & Scientific CFD Palette**: High-contrast scientific aerospace color palette with live CFD surface pressure heatmaps (suction peak in electric cyan, dynamic compression in solar amber, and stall separation in ruby red), specular Blinn-Phong highlights, and authentic liveries.
 
 ### 3. Real-Time Aerodynamic Lift Breakdown & 3D Force Vectors
@@ -76,7 +76,7 @@
 - **Framework**: React 19, TypeScript
 - **Styling**: Tailwind CSS v4
 - **Icons**: Lucide React
-- **Graphics**: HTML5 Canvas 2D + Custom 3D Matrix Projection Engine (Hardware-agnostic, zero WebGL driver crash risk)
+- **Graphics**: Three.js WebGL & Spatial 3D Matrix Projection Engine
 - **Audio**: Web Audio API (procedural pink noise filter synthesis)
 - **Build Tool**: Vite
 
@@ -90,11 +90,12 @@
 │   │   ├── AeroCharts.tsx            # Polar curves (CL-alpha, drag polar, Cp)
 │   │   ├── AeroTheoryModal.tsx       # Flight physics educational guide
 │   │   ├── ControlsDeck.tsx          # Model selector, AoA slider, presets
+│   │   ├── ModelViewerModal.tsx      # F-22 3D GLB turntable inspection modal
 │   │   ├── TelemetryHUD.tsx          # Real-time HUD, lift breakdown, CSV export
-│   │   ├── WindTunnelCanvas.tsx      # 2D Navier-Stokes fluid grid solver
-│   │   └── WindTunnelCanvas3D.tsx    # 3D Wind tunnel with spatial aircraft model
+│   │   ├── WindTunnelCanvas3D.tsx    # Spatial 3D Wind tunnel rasterizer
+│   │   └── WindTunnelCanvasWebGL.tsx # Three.js WebGL 3D wind tunnel engine
 │   ├── engine/
-│   │   └── FluidSolver.ts            # Stam 2D Navier-Stokes solver implementation
+│   │   └── FluidDynamics3D.ts        # 3D Aerodynamic fluid dynamics solver
 │   ├── types/
 │   │   └── aerodynamics.ts           # Aerodynamic types, models, telemetry data
 │   ├── utils/

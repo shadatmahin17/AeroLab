@@ -1,0 +1,6 @@
+{
+  "summary":  "Implementation plan for Telemetry HUD export menu (JSON and CSV) and aerodynamic graph export (PNG, SVG, and raw curve data) with full aircraft geometry, atmospheric conditions, and polar sweep data.",
+  "updatedAt":  "2026-10-10T15:21:12.529406539Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}
